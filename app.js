@@ -34,6 +34,15 @@ const state = {
         bruto: 185600.50,
         descontos: 32450.20,
         liquido: 153150.30
+    },
+    config: {
+        empresa: 'Minha Empresa Ltda',
+        cnpj: '00.000.000/0001-00',
+        salarioMinimo: 1412,
+        tetoINSS: 7786.02,
+        fgts: 8,
+        rat: 2,
+        fap: 1.00
     }
 };
 
@@ -74,6 +83,7 @@ function showView(viewId, element) {
     // View specific renders
     if (viewId === 'validacao') renderValidations();
     if (viewId === 'fechamento') renderFechamentoSteps();
+    if (viewId === 'configuracoes') renderConfig();
 }
 
 function toggleSidebar() {
@@ -576,8 +586,8 @@ function generateReport(type) {
                 <p style="margin:5px 0; color:#666">Competência: ${getCompetenciaExtenso()}</p>
             </div>
             <div style="text-align:right">
-                <p style="margin:0; font-weight:700">Minha Empresa Ltda</p>
-                <p style="margin:5px 0; color:#666">CNPJ: 00.000.000/0001-00</p>
+                <p style="margin:0; font-weight:700">${state.config.empresa}</p>
+                <p style="margin:5px 0; color:#666">CNPJ: ${state.config.cnpj}</p>
             </div>
         </div>
     `;
@@ -615,6 +625,17 @@ function downloadReport() {
 }
 
 // --- Configuration Logic ---
+function renderConfig() {
+    document.getElementById('configEmpresa').value = state.config.empresa;
+    document.getElementById('configCNPJ').value = state.config.cnpj;
+    document.getElementById('configSalMin').value = state.config.salarioMinimo;
+    document.getElementById('configTetoINSS').value = state.config.tetoINSS;
+    document.getElementById('configFGTS').value = state.config.fgts;
+    document.getElementById('configRAT').value = state.config.rat;
+    document.getElementById('configFAP').value = state.config.fap;
+    document.getElementById('configMes').value = state.competencia;
+}
+
 function updateCompetencia() {
     state.competencia = document.getElementById('configMes').value;
     updateCompetenciaDisplay();
@@ -629,10 +650,25 @@ function updateCompetenciaDisplay() {
 
 function saveConfig() {
     showLoading('Salvando configurações...');
+    
+    // Update state from DOM
+    state.config = {
+        empresa: document.getElementById('configEmpresa').value,
+        cnpj: document.getElementById('configCNPJ').value,
+        salarioMinimo: parseFloat(document.getElementById('configSalMin').value),
+        tetoINSS: parseFloat(document.getElementById('configTetoINSS').value),
+        fgts: parseFloat(document.getElementById('configFGTS').value),
+        rat: parseFloat(document.getElementById('configRAT').value),
+        fap: parseFloat(document.getElementById('configFAP').value)
+    };
+
     setTimeout(() => {
         hideLoading();
         showToast('Configurações salvas com sucesso!', 'success');
         showView('dashboard', document.querySelector('[data-view=dashboard]'));
+        
+        // Update header info if needed
+        updateDashboard();
     }, 800);
 }
 
