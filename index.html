@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FolhaPay – Verificação e Validação da Folha de Pagamento</title>
+  <meta name="description" content="Sistema integrado de verificação, validação e fechamento da folha de pagamento com upload de planilhas e relatórios em PDF." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 32 32" fill="none">
+            <rect width="32" height="32" rx="8" fill="url(#grad)"/>
+            <path d="M8 10h16M8 16h10M8 22h13" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="23" cy="22" r="4" fill="#38bdf8" stroke="#fff" stroke-width="1.5"/>
+            <path d="M21.5 22l1 1 2-2" stroke="#fff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="grad" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0%" stop-color="#6366f1"/>
+                <stop offset="100%" stop-color="#8b5cf6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-name">FolhaPay</span>
+          <span class="logo-sub">Verificação & Fechamento</span>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">PRINCIPAL</div>
+      <a href="#" class="nav-item active" data-view="dashboard" onclick="showView('dashboard', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </a>
+      <a href="#" class="nav-item" data-view="upload" onclick="showView('upload', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload de Arquivos
+        <span class="nav-badge" id="uploadBadge" style="display:none">!</span>
+      </a>
+      <a href="#" class="nav-item" data-view="validacao" onclick="showView('validacao', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"/></svg>
+        Validação
+        <span class="nav-badge" id="validBadge" style="display:none">0</span>
+      </a>
+      <a href="#" class="nav-item" data-view="fechamento" onclick="showView('fechamento', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
+        Fechamento
+      </a>
+      <a href="#" class="nav-item" data-view="relatorios" onclick="showView('relatorios', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+        Relatórios
+      </a>
+
+      <div class="nav-section-label" style="margin-top:12px">CONFIGURAÇÕES</div>
+      <a href="#" class="nav-item" data-view="configuracoes" onclick="showView('configuracoes', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
+        Configurações
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="competencia-badge">
+        <span class="comp-label">Competência</span>
+        <span class="comp-value" id="competenciaDisplay">Abr/2026</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="menu-toggle" onclick="toggleSidebar()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div id="breadcrumb" class="breadcrumb">Dashboard</div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-pill" id="statusPill">
+          <span class="status-dot"></span>
+          <span id="statusText">Aguardando Arquivos</span>
+        </div>
+        <button class="btn-icon" title="Notificações">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+        </button>
+        <div class="user-avatar">RH</div>
+      </div>
+    </header>
+
+    <!-- Views -->
+    <div class="view-container">
+
+      <!-- DASHBOARD VIEW -->
+      <div id="view-dashboard" class="view active">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Dashboard</h1>
+            <p class="view-subtitle">Visão geral do fechamento da folha – Competência <span id="dashComp">Abril/2026</span></p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="showView('upload', document.querySelector('[data-view=upload]'))">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload de Arquivos
+            </button>
+            <button class="btn btn-primary" onclick="runAllValidations()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"/></svg>
+              Validar Folha
+            </button>
+          </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card kpi-blue">
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg></div>
+            <div class="kpi-data">
+              <span class="kpi-value" id="kpiColaboradores">0</span>
+              <span class="kpi-label">Colaboradores</span>
+            </div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg></div>
+            <div class="kpi-data">
+              <span class="kpi-value" id="kpiBruto">R$ 0</span>
+              <span class="kpi-label">Total Bruto</span>
+            </div>
+          </div>
+          <div class="kpi-card kpi-orange">
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+            <div class="kpi-data">
+              <span class="kpi-value" id="kpiDescontos">R$ 0</span>
+              <span class="kpi-label">Total Descontos</span>
+            </div>
+          </div>
+          <div class="kpi-card kpi-purple">
+            <div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
+            <div class="kpi-data">
+              <span class="kpi-value" id="kpiLiquido">R$ 0</span>
+              <span class="kpi-label">Total Líquido</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Status and Progress -->
+        <div class="content-grid">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Status do Fechamento</h3>
+              <span class="badge badge-warning" id="fechBadge">Em Andamento</span>
+            </div>
+            <div class="checklist-progress">
+              <div class="progress-header">
+                <span>Etapas Concluídas</span>
+                <span id="progressText">0 / 6</span>
+              </div>
+              <div class="progress-bar-outer">
+                <div class="progress-bar-inner" id="progressBar" style="width:0%"></div>
+              </div>
+            </div>
+            <div class="steps-list" id="stepsList">
+              <!-- populated by JS -->
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Arquivos Carregados</h3>
+              <button class="btn btn-sm btn-ghost" onclick="showView('upload', document.querySelector('[data-view=upload]'))">+ Adicionar</button>
+            </div>
+            <div class="files-list" id="filesListDash">
+              <div class="empty-state-sm">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <p>Nenhum arquivo carregado</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alerts -->
+        <div class="card" id="alertsCard" style="display:none">
+          <div class="card-header">
+            <h3 class="card-title">⚠️ Alertas de Validação</h3>
+            <span class="badge badge-danger" id="alertCount">0</span>
+          </div>
+          <div id="alertsList" class="alerts-list"></div>
+        </div>
+      </div>
+
+      <!-- UPLOAD VIEW -->
+      <div id="view-upload" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Upload de Arquivos</h1>
+            <p class="view-subtitle">Faça o upload das planilhas e relatórios para validação da folha</p>
+          </div>
+        </div>
+
+        <div class="upload-types-grid">
+          <!-- Planilha Folha -->
+          <div class="upload-card" id="uploadCard-planilha">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-green">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+              </div>
+              <div>
+                <h3>Planilha da Folha</h3>
+                <p>Arquivo Excel (.xlsx, .xls, .csv) com os dados da folha de pagamento</p>
+              </div>
+              <div class="upload-status-icon" id="status-planilha" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-planilha" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'planilha')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('planilha')">clique para selecionar</span></p>
+              <span class="file-hint">.xlsx, .xls, .csv — máx. 20MB</span>
+              <div class="file-preview" id="preview-planilha"></div>
+            </div>
+            <input type="file" id="input-planilha" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event,'planilha')" />
+          </div>
+
+          <!-- Relatório PDF -->
+          <div class="upload-card" id="uploadCard-pdf">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-red">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </div>
+              <div>
+                <h3>Relatório PDF</h3>
+                <p>Holerites, relatórios de encargos, FGTS e demais documentos em PDF</p>
+              </div>
+              <div class="upload-status-icon" id="status-pdf" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-pdf" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'pdf')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('pdf')">clique para selecionar</span></p>
+              <span class="file-hint">.pdf — múltiplos arquivos — máx. 50MB</span>
+              <div class="file-preview" id="preview-pdf"></div>
+            </div>
+            <input type="file" id="input-pdf" accept=".pdf" multiple style="display:none" onchange="handleFileSelect(event,'pdf')" />
+          </div>
+
+          <!-- Ponto / Frequência -->
+          <div class="upload-card" id="uploadCard-ponto">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-blue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <div>
+                <h3>Espelho de Ponto</h3>
+                <p>Relatório de frequência e horas extras dos colaboradores</p>
+              </div>
+              <div class="upload-status-icon" id="status-ponto" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-ponto" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'ponto')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('ponto')">clique para selecionar</span></p>
+              <span class="file-hint">.xlsx, .pdf, .txt</span>
+              <div class="file-preview" id="preview-ponto"></div>
+            </div>
+            <input type="file" id="input-ponto" accept=".xlsx,.xls,.pdf,.txt,.csv" style="display:none" onchange="handleFileSelect(event,'ponto')" />
+          </div>
+
+          <!-- Encargos -->
+          <div class="upload-card" id="uploadCard-encargos">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-purple">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20h20M4 20V10M8 20V4M12 20V14M16 20V8M20 20V16"/></svg>
+              </div>
+              <div>
+                <h3>FGTS / Encargos</h3>
+                <p>Guias FGTS, INSS patronal e demais encargos sociais</p>
+              </div>
+              <div class="upload-status-icon" id="status-encargos" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-encargos" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'encargos')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M2 20h20M4 20V10M8 20V4M12 20V14M16 20V8M20 20V16"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('encargos')">clique para selecionar</span></p>
+              <span class="file-hint">.pdf, .xlsx</span>
+              <div class="file-preview" id="preview-encargos"></div>
+            </div>
+            <input type="file" id="input-encargos" accept=".pdf,.xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'encargos')" />
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:24px">
+          <div class="card-header">
+            <h3 class="card-title">Arquivos Carregados</h3>
+            <button class="btn btn-sm btn-danger" onclick="clearAllFiles()" id="clearAllBtn" style="display:none">Limpar Todos</button>
+          </div>
+          <div id="allFilesList">
+            <div class="empty-state-sm">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <p>Nenhum arquivo carregado ainda</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button class="btn btn-primary btn-lg" onclick="processFiles()" id="processBtn" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            Processar e Validar Arquivos
+          </button>
+        </div>
+      </div>
+
+      <!-- VALIDACAO VIEW -->
+      <div id="view-validacao" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Validação da Folha</h1>
+            <p class="view-subtitle">Verificações automáticas de consistência e integridade dos dados</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="runAllValidations()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4v5h5M20 20v-5h-5"/><path d="M4 9a9 9 0 0115 0M20 15a9 9 0 01-15 0"/></svg>
+              Revalidar
+            </button>
+          </div>
+        </div>
+
+        <div class="validations-grid" id="validationsGrid">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- FECHAMENTO VIEW -->
+      <div id="view-fechamento" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Fechamento da Folha</h1>
+            <p class="view-subtitle">Etapas obrigatórias para o fechamento oficial da competência</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary" onclick="fecharFolha()" id="btnFecharFolha" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Fechar Folha Oficialmente
+            </button>
+          </div>
+        </div>
+
+        <div class="fechamento-steps" id="fechamentoSteps">
+          <!-- populated by JS -->
+        </div>
+
+        <div class="card" id="resumoFechamento" style="display:none">
+          <div class="card-header">
+            <h3 class="card-title">📋 Resumo do Fechamento</h3>
+          </div>
+          <div class="resumo-grid" id="resumoGrid"></div>
+        </div>
+      </div>
+
+      <!-- RELATORIOS VIEW -->
+      <div id="view-relatorios" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Relatórios</h1>
+            <p class="view-subtitle">Gere e exporte relatórios completos da folha de pagamento</p>
+          </div>
+        </div>
+
+        <div class="reports-grid">
+          <div class="report-card" onclick="generateReport('resumo')">
+            <div class="report-icon icon-blue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 8 9"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Resumo da Folha</h3>
+              <p>Totais por departamento, rubricas e encargos</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+
+          <div class="report-card" onclick="generateReport('validacao')">
+            <div class="report-icon icon-green">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Relatório de Validação</h3>
+              <p>Resultado de todas as verificações realizadas</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+
+          <div class="report-card" onclick="generateReport('encargos')">
+            <div class="report-icon icon-orange">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20h20M4 20V10M8 20V4M12 20V14M16 20V8M20 20V16"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Encargos Sociais</h3>
+              <p>INSS, FGTS e demais contribuições da competência</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+
+          <div class="report-card" onclick="generateReport('holerites')">
+            <div class="report-icon icon-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="9" y1="7" x2="15" y2="7"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="9" y1="15" x2="13" y2="15"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Holerites</h3>
+              <p>Contracheques individuais de todos os colaboradores</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+
+          <div class="report-card" onclick="generateReport('divergencias')">
+            <div class="report-icon icon-red">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Divergências</h3>
+              <p>Inconsistências e alertas encontrados na validação</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+
+          <div class="report-card" onclick="generateReport('historico')">
+            <div class="report-icon icon-teal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v5h5"/><path d="M4 9A9 9 0 1020.13 14"/><polyline points="12 6 12 12 15 15"/></svg>
+            </div>
+            <div class="report-info">
+              <h3>Histórico de Alterações</h3>
+              <p>Log de todas as alterações durante o processo de fechamento</p>
+            </div>
+            <div class="report-action">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Gerar PDF
+            </div>
+          </div>
+        </div>
+
+        <!-- PDF Preview -->
+        <div class="card" id="reportPreview" style="display:none; margin-top:24px">
+          <div class="card-header">
+            <h3 class="card-title" id="previewTitle">Visualização do Relatório</h3>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm btn-secondary" onclick="printReport()">🖨️ Imprimir</button>
+              <button class="btn btn-sm btn-primary" onclick="downloadReport()">⬇️ Download PDF</button>
+              <button class="btn btn-sm btn-ghost" onclick="document.getElementById('reportPreview').style.display='none'">✕ Fechar</button>
+            </div>
+          </div>
+          <div id="reportContent" class="report-preview-content"></div>
+        </div>
+      </div>
+
+      <!-- CONFIGURACOES VIEW -->
+      <div id="view-configuracoes" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Configurações</h1>
+            <p class="view-subtitle">Configure os parâmetros da folha de pagamento</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-primary" onclick="saveConfig()">Salvar Configurações</button>
+          </div>
+        </div>
+
+        <div class="config-grid">
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">🗓️ Competência</h3></div>
+            <div class="form-group">
+              <label class="form-label">Mês/Ano de Referência</label>
+              <input type="month" class="form-input" id="configMes" value="2026-04" onchange="updateCompetencia()" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Empresa</label>
+              <input type="text" class="form-input" id="configEmpresa" placeholder="Nome da Empresa" value="Minha Empresa Ltda" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">CNPJ</label>
+              <input type="text" class="form-input" id="configCNPJ" placeholder="00.000.000/0000-00" value="00.000.000/0001-00" />
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">💰 Parâmetros</h3></div>
+            <div class="form-group">
+              <label class="form-label">Salário Mínimo</label>
+              <input type="number" class="form-input" id="configSalMin" value="1412" step="0.01" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Teto INSS (R$)</label>
+              <input type="number" class="form-input" id="configTetoINSS" value="7786.02" step="0.01" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Alíquota FGTS (%)</label>
+              <input type="number" class="form-input" id="configFGTS" value="8" step="0.01" />
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">✅ Validações Ativas</h3></div>
+            <div class="toggle-list">
+              <div class="toggle-item">
+                <div>
+                  <span class="toggle-label">Verificar CPFs</span>
+                  <span class="toggle-desc">Valida todos os CPFs da folha</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="valCPF" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="toggle-item">
+                <div>
+                  <span class="toggle-label">Checar salário mínimo</span>
+                  <span class="toggle-desc">Verifica salários abaixo do mínimo</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="valSalMin" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="toggle-item">
+                <div>
+                  <span class="toggle-label">Verificar INSS</span>
+                  <span class="toggle-desc">Calcula e confere os descontos de INSS</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="valINSS" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="toggle-item">
+                <div>
+                  <span class="toggle-label">Verificar FGTS</span>
+                  <span class="toggle-desc">Confere a base e o cálculo do FGTS</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="valFGTS" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="toggle-item">
+                <div>
+                  <span class="toggle-label">Verificar IRRF</span>
+                  <span class="toggle-desc">Valida o cálculo do imposto de renda</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="valIRRF" checked />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /view-container -->
+  </main>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="loading-overlay" style="display:none">
+    <div class="loading-box">
+      <div class="spinner"></div>
+      <p id="loadingText">Processando...</p>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="modal-overlay" style="display:none" onclick="closeModal(event)">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="modalTitle">Detalhes</h3>
+        <button class="btn-icon" onclick="document.getElementById('modal').style.display='none'">✕</button>
+      </div>
+      <div id="modalContent" class="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
