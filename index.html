@@ -51,6 +51,10 @@
         Validação
         <span class="nav-badge" id="validBadge" style="display:none">0</span>
       </a>
+      <a href="#" class="nav-item" data-view="conciliacao" onclick="showView('conciliacao', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Conciliação
+      </a>
       <a href="#" class="nav-item" data-view="fechamento" onclick="showView('fechamento', this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
         Fechamento
@@ -363,6 +367,104 @@
             <h3 class="card-title">📋 Resumo do Fechamento</h3>
           </div>
           <div class="resumo-grid" id="resumoGrid"></div>
+        </div>
+      </div>
+
+      <!-- CONCILIACAO VIEW -->
+      <div id="view-conciliacao" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Conciliação de Encargos</h1>
+            <p class="view-subtitle">Conferência de bases e valores entre Folha, eSocial, DCTFWeb e FGTS Digital</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="importGovernmentData()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Sincronizar Governo
+            </button>
+            <button class="btn btn-primary" onclick="exportConciliacao()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Exportar Planilha
+            </button>
+          </div>
+        </div>
+
+        <div class="conciliacao-container">
+          <!-- INSS / DCTFWeb Section -->
+          <div class="card" style="margin-bottom:24px">
+            <div class="card-header">
+              <h3 class="card-title">🛡️ Previdência Social (INSS / DCTFWeb)</h3>
+              <span class="badge badge-success" id="statusINSS">Conferido</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Origem</th>
+                    <th>Base de Cálculo</th>
+                    <th>Segurados</th>
+                    <th>Patronal</th>
+                    <th>RAT + FAP</th>
+                    <th>Terceiros</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody id="bodyINSS">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- FGTS Digital Section -->
+          <div class="card" style="margin-bottom:24px">
+            <div class="card-header">
+              <h3 class="card-title">💰 FGTS Digital</h3>
+              <span class="badge badge-warning" id="statusFGTS">Divergência</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Origem</th>
+                    <th>Base Mensal</th>
+                    <th>Valor Mensal</th>
+                    <th>Base Rescisória</th>
+                    <th>Valor Rescisório</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody id="bodyFGTS">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- FGTS Desligados Detail -->
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">🚪 FGTS de Desligados (Mês de Conferência)</h3>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Colaborador</th>
+                    <th>Desligamento</th>
+                    <th>Tipo</th>
+                    <th>Base Rescisória</th>
+                    <th>Multa 40%</th>
+                    <th>Total Devido</th>
+                    <th>Status GFD</th>
+                  </tr>
+                </thead>
+                <tbody id="bodyDesligados">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 

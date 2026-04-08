@@ -43,6 +43,20 @@ const state = {
         fgts: 8,
         rat: 2,
         fap: 1.00
+    },
+    conciliacao: {
+        inss: [
+            { origem: 'Folha Pay', base: 452930.00, segurados: 48200.40, patronal: 90586.00, ratfap: 9058.60, terceiros: 26269.94, total: 174114.94 },
+            { origem: 'DCTFWeb', base: 452930.00, segurados: 48200.40, patronal: 90586.00, ratfap: 9058.60, terceiros: 26269.94, total: 174114.94 }
+        ],
+        fgts: [
+            { origem: 'Folha Pay', baseMensal: 382400.00, valorMensal: 30592.00, baseRescisoria: 70530.00, valorRescisorio: 5642.40, total: 36234.40 },
+            { origem: 'FGTS Digital', baseMensal: 382400.00, valorMensal: 30592.00, baseRescisoria: 68000.00, valorRescisorio: 5440.00, total: 36032.00 }
+        ],
+        desligados: [
+            { nome: 'Ana Paula Oliveira', data: '12/04/2026', tipo: 'Sem Justa Causa', base: 12450.00, multa: 4980.00, total: 17430.00, status: 'Recolhido' },
+            { nome: 'Carlos Eduardo Santos', data: '15/04/2026', tipo: 'Acordo Art. 484-A', base: 8200.00, multa: 1640.00, total: 9840.00, status: 'Pendente' }
+        ]
     }
 };
 
@@ -84,6 +98,7 @@ function showView(viewId, element) {
     if (viewId === 'validacao') renderValidations();
     if (viewId === 'fechamento') renderFechamentoSteps();
     if (viewId === 'configuracoes') renderConfig();
+    if (viewId === 'conciliacao') renderConciliacao();
 }
 
 function toggleSidebar() {
@@ -634,6 +649,115 @@ function renderConfig() {
     document.getElementById('configRAT').value = state.config.rat;
     document.getElementById('configFAP').value = state.config.fap;
     document.getElementById('configMes').value = state.competencia;
+}
+
+// --- Conciliação Logic ---
+function renderConciliacao() {
+    renderINSS();
+    renderFGTS();
+    renderDesligados();
+}
+
+function renderINSS() {
+    const body = document.getElementById('bodyINSS');
+    const f = state.conciliacao.inss[0];
+    const g = state.conciliacao.inss[1];
+    
+    let html = `
+        <tr><td><span class="origin-tag folha">🏦 ${f.origem}</span></td><td>${formatCurrency(f.base)}</td><td>${formatCurrency(f.segurados)}</td><td>${formatCurrency(f.patronal)}</td><td>${formatCurrency(f.ratfap)}</td><td>${formatCurrency(f.terceiros)}</td><td style="font-weight:700">${formatCurrency(f.total)}</td></tr>
+        <tr><td><span class="origin-tag governo">🏛️ ${g.origem}</span></td><td>${formatCurrency(g.base)}</td><td>${formatCurrency(g.segurados)}</td><td>${formatCurrency(g.patronal)}</td><td>${formatCurrency(g.ratfap)}</td><td>${formatCurrency(g.terceiros)}</td><td style="font-weight:700">${formatCurrency(g.total)}</td></tr>
+    `;
+    
+    // Calculate Diff
+    const diff = {
+        base: f.base - g.base,
+        seg: f.segurados - g.segurados,
+        pat: f.patronal - g.patronal,
+        rf: f.ratfap - g.ratfap,
+        ter: f.terceiros - g.terceiros,
+        total: f.total - g.total
+    };
+    
+    html += `
+        <tr style="background:rgba(239,68,68,0.05)">
+            <td><span class="origin-tag diff">⚠️ Diferença</span></td>
+            <td class="${diff.base !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.base)}</td>
+            <td class="${diff.seg !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.seg)}</td>
+            <td class="${diff.pat !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.pat)}</td>
+            <td class="${diff.rf !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.rf)}</td>
+            <td class="${diff.ter !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.ter)}</td>
+            <td style="font-weight:800" class="${diff.total !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.total)}</td>
+        </tr>
+    `;
+    
+    body.innerHTML = html;
+    document.getElementById('statusINSS').className = diff.total === 0 ? 'badge badge-success' : 'badge badge-warning';
+    document.getElementById('statusINSS').innerText = diff.total === 0 ? 'Conferido' : 'Divergência';
+}
+
+function renderFGTS() {
+    const body = document.getElementById('bodyFGTS');
+    const f = state.conciliacao.fgts[0];
+    const g = state.conciliacao.fgts[1];
+    
+    let html = `
+        <tr><td><span class="origin-tag folha">🏦 ${f.origem}</span></td><td>${formatCurrency(f.baseMensal)}</td><td>${formatCurrency(f.valorMensal)}</td><td>${formatCurrency(f.baseRescisoria)}</td><td>${formatCurrency(f.valorRescisorio)}</td><td style="font-weight:700">${formatCurrency(f.total)}</td></tr>
+        <tr><td><span class="origin-tag governo">🏛️ ${g.origem}</span></td><td>${formatCurrency(g.baseMensal)}</td><td>${formatCurrency(g.valorMensal)}</td><td>${formatCurrency(g.baseRescisoria)}</td><td>${formatCurrency(g.valorRescisorio)}</td><td style="font-weight:700">${formatCurrency(g.total)}</td></tr>
+    `;
+    
+    const diff = {
+        bm: f.baseMensal - g.baseMensal,
+        vm: f.valorMensal - g.valorMensal,
+        br: f.baseRescisoria - g.baseRescisoria,
+        vr: f.valorRescisorio - g.valorRescisorio,
+        total: f.total - g.total
+    };
+    
+    html += `
+        <tr style="background:rgba(239,68,68,0.05)">
+            <td><span class="origin-tag diff">⚠️ Diferença</span></td>
+            <td class="${diff.bm !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.bm)}</td>
+            <td class="${diff.vm !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.vm)}</td>
+            <td class="${diff.br !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.br)}</td>
+            <td class="${diff.vr !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.vr)}</td>
+            <td style="font-weight:800" class="${diff.total !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.total)}</td>
+        </tr>
+    `;
+    
+    body.innerHTML = html;
+    document.getElementById('statusFGTS').className = diff.total === 0 ? 'badge badge-success' : 'badge badge-warning';
+    document.getElementById('statusFGTS').innerText = diff.total === 0 ? 'Conferido' : 'Divergência';
+}
+
+function renderDesligados() {
+    const body = document.getElementById('bodyDesligados');
+    body.innerHTML = state.conciliacao.desligados.map(d => `
+        <tr>
+            <td><strong>${d.nome}</strong></td>
+            <td>${d.data}</td>
+            <td>${d.tipo}</td>
+            <td>${formatCurrency(d.base)}</td>
+            <td>${formatCurrency(d.multa)}</td>
+            <td>${formatCurrency(d.total)}</td>
+            <td><span class="badge ${d.status === 'Recolhido' ? 'badge-success' : 'badge-warning'}">${d.status}</span></td>
+        </tr>
+    `).join('');
+}
+
+function importGovernmentData() {
+    showLoading('Conectando ao eSocial / DCTFWeb / FGTS Digital...');
+    setTimeout(() => {
+        hideLoading();
+        showToast('Dados do governo sincronizados com sucesso!', 'success');
+        renderConciliacao();
+    }, 2500);
+}
+
+function exportConciliacao() {
+    showToast('Gerando planilha de conciliação...', 'info');
+    setTimeout(() => {
+        showToast('Exportação concluída!', 'success');
+    }, 1500);
 }
 
 function updateCompetencia() {
