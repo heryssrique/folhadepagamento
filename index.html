@@ -389,81 +389,52 @@
           </div>
         </div>
 
-        <div class="conciliacao-container">
+        <div class="conciliacao-grid">
           <!-- INSS / DCTFWeb Section -->
-          <div class="card" style="margin-bottom:24px">
+          <div class="card conciliacao-section">
             <div class="card-header">
               <h3 class="card-title">🛡️ Previdência Social (INSS / DCTFWeb)</h3>
               <span class="badge badge-success" id="statusINSS">Conferido</span>
             </div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Origem</th>
-                    <th>Base de Cálculo</th>
-                    <th>Segurados</th>
-                    <th>Patronal</th>
-                    <th>RAT + FAP</th>
-                    <th>Terceiros</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody id="bodyINSS">
-                  <!-- populated by JS -->
-                </tbody>
-              </table>
+            <div class="comparison-stack" id="stackINSS">
+              <!-- populated by JS -->
             </div>
           </div>
 
           <!-- FGTS Digital Section -->
-          <div class="card" style="margin-bottom:24px">
+          <div class="card conciliacao-section">
             <div class="card-header">
               <h3 class="card-title">💰 FGTS Digital</h3>
               <span class="badge badge-warning" id="statusFGTS">Divergência</span>
             </div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Origem</th>
-                    <th>Base Mensal</th>
-                    <th>Valor Mensal</th>
-                    <th>Base Rescisória</th>
-                    <th>Valor Rescisório</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody id="bodyFGTS">
-                  <!-- populated by JS -->
-                </tbody>
-              </table>
+            <div class="comparison-stack" id="stackFGTS">
+              <!-- populated by JS -->
             </div>
           </div>
+        </div>
 
-          <!-- FGTS Desligados Detail -->
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">🚪 FGTS de Desligados (Mês de Conferência)</h3>
-            </div>
-            <div class="table-responsive">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Colaborador</th>
-                    <th>Desligamento</th>
-                    <th>Tipo</th>
-                    <th>Base Rescisória</th>
-                    <th>Multa 40%</th>
-                    <th>Total Devido</th>
-                    <th>Status GFD</th>
-                  </tr>
-                </thead>
-                <tbody id="bodyDesligados">
-                  <!-- populated by JS -->
-                </tbody>
-              </table>
-            </div>
+        <!-- FGTS Desligados Detail -->
+        <div class="card" style="margin-top:24px">
+          <div class="card-header">
+            <h3 class="card-title">🚪 Detalhamento de Recolhimento - Desligados</h3>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Colaborador</th>
+                  <th>Desligamento</th>
+                  <th>Tipo Movimentação</th>
+                  <th style="text-align:right">Base Rescisória</th>
+                  <th style="text-align:right">Multa (40%)</th>
+                  <th style="text-align:right">Total GFD</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="bodyDesligados">
+                <!-- populated by JS -->
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

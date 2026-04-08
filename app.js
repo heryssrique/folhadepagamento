@@ -659,86 +659,113 @@ function renderConciliacao() {
 }
 
 function renderINSS() {
-    const body = document.getElementById('bodyINSS');
+    const stack = document.getElementById('stackINSS');
     const f = state.conciliacao.inss[0];
     const g = state.conciliacao.inss[1];
     
-    let html = `
-        <tr><td><span class="origin-tag folha">🏦 ${f.origem}</span></td><td>${formatCurrency(f.base)}</td><td>${formatCurrency(f.segurados)}</td><td>${formatCurrency(f.patronal)}</td><td>${formatCurrency(f.ratfap)}</td><td>${formatCurrency(f.terceiros)}</td><td style="font-weight:700">${formatCurrency(f.total)}</td></tr>
-        <tr><td><span class="origin-tag governo">🏛️ ${g.origem}</span></td><td>${formatCurrency(g.base)}</td><td>${formatCurrency(g.segurados)}</td><td>${formatCurrency(g.patronal)}</td><td>${formatCurrency(g.ratfap)}</td><td>${formatCurrency(g.terceiros)}</td><td style="font-weight:700">${formatCurrency(g.total)}</td></tr>
-    `;
+    const metrics = [
+        { label: 'Base de Cálculo', key: 'base' },
+        { label: 'Segurados Retido', key: 'segurados' },
+        { label: 'Patronal (CPP)', key: 'patronal' },
+        { label: 'RAT + FAP', key: 'ratfap' },
+        { label: 'Terceiros', key: 'terceiros' },
+        { label: 'Total Geral INSS', key: 'total' }
+    ];
     
-    // Calculate Diff
-    const diff = {
-        base: f.base - g.base,
-        seg: f.segurados - g.segurados,
-        pat: f.patronal - g.patronal,
-        rf: f.ratfap - g.ratfap,
-        ter: f.terceiros - g.terceiros,
-        total: f.total - g.total
-    };
+    stack.innerHTML = metrics.map(m => {
+        const valF = f[m.key];
+        const valG = g[m.key];
+        const diff = valF - valG;
+        const isMatch = Math.abs(diff) < 0.01;
+        
+        return `
+            <div class="comparison-card">
+                <div class="comp-header">
+                    <span class="comp-label">${m.label}</span>
+                    <span class="comp-tag ${isMatch ? 'tag-governo' : 'tag-folha'}" style="background:none;border:1px solid currentColor">${isMatch ? 'Sincronizado' : 'Revisar'}</span>
+                </div>
+                <div class="comp-body">
+                    <div class="comp-item">
+                        <span class="comp-item-label"><span class="comp-tag tag-folha">Folha</span></span>
+                        <span class="comp-item-value">${formatCurrency(valF)}</span>
+                    </div>
+                    <div class="comp-item">
+                        <span class="comp-item-label"><span class="comp-tag tag-governo">Governo</span></span>
+                        <span class="comp-item-value">${formatCurrency(valG)}</span>
+                    </div>
+                </div>
+                <div class="comp-footer">
+                    <span class="comp-diff-label">${isMatch ? '✓ Sem divergências' : '⚠️ Diferença Detectada'}</span>
+                    <span class="comp-diff-value ${isMatch ? 'matches' : 'divergent'}">${formatCurrency(diff)}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
     
-    html += `
-        <tr style="background:rgba(239,68,68,0.05)">
-            <td><span class="origin-tag diff">⚠️ Diferença</span></td>
-            <td class="${diff.base !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.base)}</td>
-            <td class="${diff.seg !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.seg)}</td>
-            <td class="${diff.pat !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.pat)}</td>
-            <td class="${diff.rf !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.rf)}</td>
-            <td class="${diff.ter !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.ter)}</td>
-            <td style="font-weight:800" class="${diff.total !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.total)}</td>
-        </tr>
-    `;
-    
-    body.innerHTML = html;
-    document.getElementById('statusINSS').className = diff.total === 0 ? 'badge badge-success' : 'badge badge-warning';
-    document.getElementById('statusINSS').innerText = diff.total === 0 ? 'Conferido' : 'Divergência';
+    const totalDiff = Math.abs(f.total - g.total);
+    document.getElementById('statusINSS').className = totalDiff < 0.01 ? 'badge badge-success' : 'badge badge-warning';
+    document.getElementById('statusINSS').innerText = totalDiff < 0.01 ? 'Conferido' : 'Divergência';
 }
 
 function renderFGTS() {
-    const body = document.getElementById('bodyFGTS');
+    const stack = document.getElementById('stackFGTS');
     const f = state.conciliacao.fgts[0];
     const g = state.conciliacao.fgts[1];
     
-    let html = `
-        <tr><td><span class="origin-tag folha">🏦 ${f.origem}</span></td><td>${formatCurrency(f.baseMensal)}</td><td>${formatCurrency(f.valorMensal)}</td><td>${formatCurrency(f.baseRescisoria)}</td><td>${formatCurrency(f.valorRescisorio)}</td><td style="font-weight:700">${formatCurrency(f.total)}</td></tr>
-        <tr><td><span class="origin-tag governo">🏛️ ${g.origem}</span></td><td>${formatCurrency(g.baseMensal)}</td><td>${formatCurrency(g.valorMensal)}</td><td>${formatCurrency(g.baseRescisoria)}</td><td>${formatCurrency(g.valorRescisorio)}</td><td style="font-weight:700">${formatCurrency(g.total)}</td></tr>
-    `;
+    const metrics = [
+        { label: 'Base FGTS Mensal', key: 'baseMensal' },
+        { label: 'Valor FGTS Mensal', key: 'valorMensal' },
+        { label: 'Base FGTS Rescisório', key: 'baseRescisoria' },
+        { label: 'Valor FGTS Rescisório', key: 'valorRescisorio' },
+        { label: 'Total a Recolher (GFD)', key: 'total' }
+    ];
     
-    const diff = {
-        bm: f.baseMensal - g.baseMensal,
-        vm: f.valorMensal - g.valorMensal,
-        br: f.baseRescisoria - g.baseRescisoria,
-        vr: f.valorRescisorio - g.valorRescisorio,
-        total: f.total - g.total
-    };
+    stack.innerHTML = metrics.map(m => {
+        const valF = f[m.key];
+        const valG = g[m.key];
+        const diff = valF - valG;
+        const isMatch = Math.abs(diff) < 0.01;
+        
+        return `
+            <div class="comparison-card">
+                <div class="comp-header">
+                    <span class="comp-label">${m.label}</span>
+                </div>
+                <div class="comp-body">
+                    <div class="comp-item">
+                        <span class="comp-item-label"><span class="comp-tag tag-folha">Folha</span></span>
+                        <span class="comp-item-value">${formatCurrency(valF)}</span>
+                    </div>
+                    <div class="comp-item">
+                        <span class="comp-item-label"><span class="comp-tag tag-governo">Governo</span></span>
+                        <span class="comp-item-value">${formatCurrency(valG)}</span>
+                    </div>
+                </div>
+                <div class="comp-footer">
+                    <span class="comp-diff-label">${isMatch ? '✓ Valores conferem' : '⚠️ Divergência'}</span>
+                    <span class="comp-diff-value ${isMatch ? 'matches' : 'divergent'}">${formatCurrency(diff)}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
     
-    html += `
-        <tr style="background:rgba(239,68,68,0.05)">
-            <td><span class="origin-tag diff">⚠️ Diferença</span></td>
-            <td class="${diff.bm !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.bm)}</td>
-            <td class="${diff.vm !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.vm)}</td>
-            <td class="${diff.br !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.br)}</td>
-            <td class="${diff.vr !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.vr)}</td>
-            <td style="font-weight:800" class="${diff.total !== 0 ? 'val-negative' : ''}">${formatCurrency(diff.total)}</td>
-        </tr>
-    `;
-    
-    body.innerHTML = html;
-    document.getElementById('statusFGTS').className = diff.total === 0 ? 'badge badge-success' : 'badge badge-warning';
-    document.getElementById('statusFGTS').innerText = diff.total === 0 ? 'Conferido' : 'Divergência';
+    const totalDiff = Math.abs(f.total - g.total);
+    document.getElementById('statusFGTS').className = totalDiff < 0.01 ? 'badge badge-success' : 'badge badge-warning';
+    document.getElementById('statusFGTS').innerText = totalDiff < 0.01 ? 'Conferido' : 'Divergência';
 }
 
 function renderDesligados() {
     const body = document.getElementById('bodyDesligados');
     body.innerHTML = state.conciliacao.desligados.map(d => `
         <tr>
-            <td><strong>${d.nome}</strong></td>
+            <td>
+                <div style="font-weight:700; color:var(--text-primary)">${d.nome}</div>
+            </td>
             <td>${d.data}</td>
-            <td>${d.tipo}</td>
-            <td>${formatCurrency(d.base)}</td>
-            <td>${formatCurrency(d.multa)}</td>
-            <td>${formatCurrency(d.total)}</td>
+            <td><span style="font-size:0.75rem; color:var(--text-muted)">${d.tipo}</span></td>
+            <td style="text-align:right; font-family:'JetBrains Mono'">${formatCurrency(d.base)}</td>
+            <td style="text-align:right; font-family:'JetBrains Mono'">${formatCurrency(d.multa)}</td>
+            <td style="text-align:right; font-family:'JetBrains Mono'; font-weight:700">${formatCurrency(d.total)}</td>
             <td><span class="badge ${d.status === 'Recolhido' ? 'badge-success' : 'badge-warning'}">${d.status}</span></td>
         </tr>
     `).join('');
