@@ -659,7 +659,7 @@ function renderConciliacao() {
 }
 
 function renderINSS() {
-    const stack = document.getElementById('stackINSS');
+    const body = document.getElementById('bodyINSS');
     const f = state.conciliacao.inss[0];
     const g = state.conciliacao.inss[1];
     
@@ -672,33 +672,20 @@ function renderINSS() {
         { label: 'Total Geral INSS', key: 'total' }
     ];
     
-    stack.innerHTML = metrics.map(m => {
+    body.innerHTML = metrics.map(m => {
         const valF = f[m.key];
         const valG = g[m.key];
         const diff = valF - valG;
         const isMatch = Math.abs(diff) < 0.01;
         
         return `
-            <div class="comparison-card">
-                <div class="comp-header">
-                    <span class="comp-label">${m.label}</span>
-                    <span class="comp-tag ${isMatch ? 'tag-governo' : 'tag-folha'}" style="background:none;border:1px solid currentColor">${isMatch ? 'Sincronizado' : 'Revisar'}</span>
-                </div>
-                <div class="comp-body">
-                    <div class="comp-item">
-                        <span class="comp-item-label"><span class="comp-tag tag-folha">Folha</span></span>
-                        <span class="comp-item-value">${formatCurrency(valF)}</span>
-                    </div>
-                    <div class="comp-item">
-                        <span class="comp-item-label"><span class="comp-tag tag-governo">Governo</span></span>
-                        <span class="comp-item-value">${formatCurrency(valG)}</span>
-                    </div>
-                </div>
-                <div class="comp-footer">
-                    <span class="comp-diff-label">${isMatch ? '✓ Sem divergências' : '⚠️ Diferença Detectada'}</span>
-                    <span class="comp-diff-value ${isMatch ? 'matches' : 'divergent'}">${formatCurrency(diff)}</span>
-                </div>
-            </div>
+            <tr>
+                <td class="row-label">${m.label}</td>
+                <td style="text-align:right" class="val-mono">${formatCurrency(valF)}</td>
+                <td style="text-align:right" class="val-mono">${formatCurrency(valG)}</td>
+                <td style="text-align:right" class="val-mono diff-cell ${isMatch ? 'diff-none' : 'diff-alert'}">${formatCurrency(diff)}</td>
+                <td style="text-align:center"><span class="status-check ${isMatch ? 'ok' : 'error'}">${isMatch ? '✓' : '!'}</span></td>
+            </tr>
         `;
     }).join('');
     
@@ -708,7 +695,7 @@ function renderINSS() {
 }
 
 function renderFGTS() {
-    const stack = document.getElementById('stackFGTS');
+    const body = document.getElementById('bodyFGTS');
     const f = state.conciliacao.fgts[0];
     const g = state.conciliacao.fgts[1];
     
@@ -720,32 +707,20 @@ function renderFGTS() {
         { label: 'Total a Recolher (GFD)', key: 'total' }
     ];
     
-    stack.innerHTML = metrics.map(m => {
+    body.innerHTML = metrics.map(m => {
         const valF = f[m.key];
         const valG = g[m.key];
         const diff = valF - valG;
         const isMatch = Math.abs(diff) < 0.01;
         
         return `
-            <div class="comparison-card">
-                <div class="comp-header">
-                    <span class="comp-label">${m.label}</span>
-                </div>
-                <div class="comp-body">
-                    <div class="comp-item">
-                        <span class="comp-item-label"><span class="comp-tag tag-folha">Folha</span></span>
-                        <span class="comp-item-value">${formatCurrency(valF)}</span>
-                    </div>
-                    <div class="comp-item">
-                        <span class="comp-item-label"><span class="comp-tag tag-governo">Governo</span></span>
-                        <span class="comp-item-value">${formatCurrency(valG)}</span>
-                    </div>
-                </div>
-                <div class="comp-footer">
-                    <span class="comp-diff-label">${isMatch ? '✓ Valores conferem' : '⚠️ Divergência'}</span>
-                    <span class="comp-diff-value ${isMatch ? 'matches' : 'divergent'}">${formatCurrency(diff)}</span>
-                </div>
-            </div>
+            <tr>
+                <td class="row-label">${m.label}</td>
+                <td style="text-align:right" class="val-mono">${formatCurrency(valF)}</td>
+                <td style="text-align:right" class="val-mono">${formatCurrency(valG)}</td>
+                <td style="text-align:right" class="val-mono diff-cell ${isMatch ? 'diff-none' : 'diff-alert'}">${formatCurrency(diff)}</td>
+                <td style="text-align:center"><span class="status-check ${isMatch ? 'ok' : 'error'}">${isMatch ? '✓' : '!'}</span></td>
+            </tr>
         `;
     }).join('');
     

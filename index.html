@@ -390,25 +390,66 @@
         </div>
 
         <div class="conciliacao-grid">
-          <!-- INSS / DCTFWeb Section -->
-          <div class="card conciliacao-section">
+        <div class="conciliacao-stack">
+          <!-- INSS Section -->
+          <div class="card conciliacao-card">
             <div class="card-header">
-              <h3 class="card-title">🛡️ Previdência Social (INSS / DCTFWeb)</h3>
+              <div class="tax-info" style="display:flex;gap:12px;align-items:center">
+                <span class="tax-icon" style="font-size:1.5rem">🛡️</span>
+                <div>
+                  <h3 class="card-title">INSS & Previdência Social</h3>
+                  <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Conferência DCTFWeb vs Folha Pay</p>
+                </div>
+              </div>
               <span class="badge badge-success" id="statusINSS">Conferido</span>
             </div>
-            <div class="comparison-stack" id="stackINSS">
-              <!-- populated by JS -->
+            
+            <div class="table-responsive">
+              <table class="recon-table">
+                <thead>
+                  <tr>
+                    <th style="width:30%">Métrica / Rubrica</th>
+                    <th style="text-align:right">Folha Interna</th>
+                    <th style="text-align:right">Governo (eSocial)</th>
+                    <th style="text-align:right">Diferença</th>
+                    <th style="width:100px; text-align:center">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="bodyINSS">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
             </div>
           </div>
 
-          <!-- FGTS Digital Section -->
-          <div class="card conciliacao-section">
+          <!-- FGTS Section -->
+          <div class="card conciliacao-card" style="margin-top:24px">
             <div class="card-header">
-              <h3 class="card-title">💰 FGTS Digital</h3>
-              <span class="badge badge-warning" id="statusFGTS">Divergência</span>
+              <div class="tax-info" style="display:flex;gap:12px;align-items:center">
+                <span class="tax-icon" style="font-size:1.5rem">💰</span>
+                <div>
+                  <h3 class="card-title">FGTS Digital</h3>
+                  <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Conferência GFD vs Folha Pay</p>
+                </div>
+              </div>
+              <span class="badge badge-warning" id="statusFGTS">Atenção</span>
             </div>
-            <div class="comparison-stack" id="stackFGTS">
-              <!-- populated by JS -->
+            
+            <div class="table-responsive">
+              <table class="recon-table">
+                <thead>
+                  <tr>
+                    <th style="width:30%">Métrica de FGTS</th>
+                    <th style="text-align:right">Folha Interna</th>
+                    <th style="text-align:right">FGTS Digital</th>
+                    <th style="text-align:right">Diferença</th>
+                    <th style="width:100px; text-align:center">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="bodyFGTS">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
