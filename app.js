@@ -76,7 +76,9 @@ const state = {
 };
 
 // --- Persistence (MongoDB + Local Fallback) ---
-const API_URL = 'http://localhost:3001/api';
+const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? 'http://localhost:3001/api' 
+    : '/api';
 
 async function saveState() {
     const data = {
