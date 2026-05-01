@@ -41,6 +41,15 @@ app.post('/api/state', async (req, res) => {
     }
 });
 
+app.delete('/api/state', async (req, res) => {
+    try {
+        await State.deleteOne({ userId: 'default' });
+        res.json({ message: 'State reset successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Serve static files (optional, if you want Express to serve the frontend too)
 // app.use(express.static('../'));
 
@@ -48,6 +57,11 @@ const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/folhapay';
 
 // Connect to MongoDB
+if (process.env.MONGODB_URI) {
+    const maskedUri = process.env.MONGODB_URI.replace(/:([^@]+)@/, ':****@');
+    console.log('DEBUG: Tentando conectar em:', maskedUri);
+}
+
 mongoose.connect(MONGODB_URI)
     .then(() => console.log('✅ Connected to MongoDB'))
     .catch(err => console.error('❌ MongoDB Connection Error:', err));

@@ -416,6 +416,8 @@ body {
 .kpi-orange::before { background: var(--accent-orange); }
 .kpi-purple { background: rgba(139,92,246,0.1); border-color: rgba(139,92,246,0.2); }
 .kpi-purple::before { background: var(--accent-purple); }
+.kpi-red { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.2); }
+.kpi-red::before { background: var(--accent-red); }
 
 .kpi-icon {
   width: 48px;
@@ -431,6 +433,7 @@ body {
 .kpi-green .kpi-icon { background: rgba(16,185,129,0.2); color: var(--accent-green); }
 .kpi-orange .kpi-icon { background: rgba(245,158,11,0.2); color: var(--accent-orange); }
 .kpi-purple .kpi-icon { background: rgba(139,92,246,0.2); color: var(--accent-purple); }
+.kpi-red .kpi-icon { background: rgba(239,68,68,0.2); color: var(--accent-red); }
 
 .kpi-icon svg { width: 22px; height: 22px; }
 

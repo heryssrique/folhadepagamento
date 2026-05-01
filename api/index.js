@@ -54,6 +54,16 @@ app.post('/api/state', async (req, res) => {
     }
 });
 
+app.delete('/api/state', async (req, res) => {
+    try {
+        await connectToDatabase();
+        await State.deleteOne({ userId: 'default' });
+        res.json({ message: 'State reset successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Root route for API health check
 app.get('/api', (req, res) => {
     res.json({ status: 'FolhaPay API is running' });
