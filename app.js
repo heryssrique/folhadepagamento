@@ -371,15 +371,19 @@ function checkUploadProgress() {
 
     // Update Topbar Status
     const statusPill = document.getElementById('statusPill');
-    const statusDot = statusPill.querySelector('.status-dot');
-    const statusText = document.getElementById('statusText');
+    if (statusPill) {
+        const statusDot = statusPill.querySelector('.status-dot');
+        const statusText = document.getElementById('statusText');
 
-    if (hasPlanilha) {
-        statusDot.className = 'status-dot green';
-        statusText.innerText = 'Arquivos Prontos';
-    } else {
-        statusDot.className = 'status-dot';
-        statusText.innerText = 'Aguardando Arquivos';
+        if (statusDot && statusText) {
+            if (hasPlanilha) {
+                statusDot.className = 'status-dot green';
+                statusText.innerText = 'Arquivos Prontos';
+            } else {
+                statusDot.className = 'status-dot';
+                statusText.innerText = 'Aguardando Arquivos';
+            }
+        }
     }
 }
 
