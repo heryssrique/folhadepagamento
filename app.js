@@ -35,7 +35,22 @@ const state = {
         descontos: 32450.20,
         liquido: 153150.30
     },
-    config: {
+    empresas: [
+        { 
+            id: 1, 
+            nome: 'Minha Empresa Ltda', 
+            cnpj: '00.000.000/0001-00', 
+            active: true,
+            config: {
+                salarioMinimo: 1412,
+                tetoINSS: 7786.02,
+                fgts: 8,
+                rat: 2,
+                fap: 1.00
+            }
+        }
+    ],
+    config: { // Será sincronizado com a empresa ativa
         empresa: 'Minha Empresa Ltda',
         cnpj: '00.000.000/0001-00',
         salarioMinimo: 1412,
@@ -60,14 +75,94 @@ const state = {
     }
 };
 
-// --- Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
+// --- Persistence (MongoDB + Local Fallback) ---
+const API_URL = 'http://localhost:3001/api';
+
+async function saveState() {
+    const data = {
+        empresas: state.empresas,
+        config: state.config,
+        competencia: state.competencia
+    };
+    
+    // Backup local
+    localStorage.setItem('folhapay_db', JSON.stringify(data));
+
+    // Persistência Online
+    try {
+        await fetch(`${API_URL}/state`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+    } catch (e) {
+        console.warn('Servidor offline. Dados salvos apenas localmente.');
+    }
+}
+
+async function loadState() {
+    // 1. Tenta carregar do MongoDB
+    try {
+        const response = await fetch(`${API_URL}/state`);
+        const data = await response.json();
+        if (data) {
+            applyState(data);
+            return;
+        }
+    } catch (e) {
+        console.warn('Erro ao conectar ao MongoDB, usando dados locais.');
+    }
+
+    // 2. Fallback para LocalStorage
+    const saved = localStorage.getItem('folhapay_db');
+    if (saved) {
+        try {
+            applyState(JSON.parse(saved));
+        } catch (e) {
+            console.error('Erro ao ler LocalStorage:', e);
+        }
+    }
+}
+
+function applyState(data) {
+    if (data.empresas) {
+        state.empresas = data.empresas.map(emp => {
+            if (!emp.config) {
+                emp.config = {
+                    salarioMinimo: 1412,
+                    tetoINSS: 7786.02,
+                    fgts: 8,
+                    rat: 2,
+                    fap: 1.00
+                };
+            }
+            return emp;
+        });
+    }
+    if (data.config) state.config = data.config;
+    if (data.competencia) state.competencia = data.competencia;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Carrega dados persistidos
+    await loadState();
+    
+    // Inicializa a interface
     renderDashboard();
     renderFechamentoSteps();
-    updateCompetenciaDisplay();
+    updateDashboard();
+
+    // Listener global para navegação
+    document.addEventListener('click', (e) => {
+        const navItem = e.target.closest('.nav-item');
+        if (navItem && navItem.hasAttribute('data-view')) {
+            e.preventDefault();
+            const viewId = navItem.getAttribute('data-view');
+            showView(viewId, navItem);
+        }
+    });
     
-    // Auto-update dashboard metrics if files exist (simulated)
-    updateKPIs();
+    console.log('FolhaPay: App Logic Initialized');
 });
 
 // --- View Navigation ---
@@ -79,26 +174,40 @@ function showView(viewId, element) {
         'validacao': 'Validação da Folha',
         'fechamento': 'Fechamento da Folha',
         'relatorios': 'Relatórios',
-        'configuracoes': 'Configurações'
+        'configuracoes': 'Configurações',
+        'conciliacao': 'Conciliação de Encargos'
     };
-    document.getElementById('breadcrumb').innerText = breadcrumbs[viewId];
+    
+    const breadcrumbEl = document.getElementById('breadcrumb');
+    if (breadcrumbEl) breadcrumbEl.innerText = breadcrumbs[viewId] || 'FolhaPay';
 
     // Update Nav Active State
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
-    if (element) element.classList.add('active');
+    
+    // Se element não foi passado, tenta encontrar pelo data-view
+    const navItem = element || document.querySelector(`.nav-item[data-view="${viewId}"]`);
+    if (navItem) navItem.classList.add('active');
 
     // Update View Visibility
     document.querySelectorAll('.view').forEach(view => view.classList.remove('active'));
     const targetView = document.getElementById(`view-${viewId}`);
-    if (targetView) targetView.classList.add('active');
+    if (targetView) {
+        targetView.classList.add('active');
+        window.scrollTo(0, 0);
+    }
 
     state.currentView = viewId;
 
-    // View specific renders
-    if (viewId === 'validacao') renderValidations();
-    if (viewId === 'fechamento') renderFechamentoSteps();
-    if (viewId === 'configuracoes') renderConfig();
-    if (viewId === 'conciliacao') renderConciliacao();
+    // View specific renders with error protection
+    try {
+        if (viewId === 'dashboard') renderDashboard();
+        if (viewId === 'validacao') renderValidations();
+        if (viewId === 'fechamento') renderFechamentoSteps();
+        if (viewId === 'configuracoes') renderConfig();
+        if (viewId === 'conciliacao') renderConciliacao();
+    } catch (err) {
+        console.error(`Erro ao renderizar view ${viewId}:`, err);
+    }
 }
 
 function toggleSidebar() {
@@ -547,8 +656,110 @@ function updateKPIs() {
     animateValue('kpiDescontos', 0, state.summary.descontos, true);
     animateValue('kpiLiquido', 0, state.summary.liquido, true);
     
-    document.getElementById('dashComp').innerText = getCompetenciaExtenso();
+    const compEl = document.getElementById('dashComp');
+    if (compEl) compEl.innerText = getCompetenciaExtenso();
+    
+    const empEl = document.getElementById('dashEmpresaName');
+    if (empEl) empEl.innerText = state.config.empresa;
 }
+
+function updateDashboard() {
+    renderDashboard();
+    updateKPIs();
+    
+    // Sync Quick Selectors (Styled)
+    const quickEmp = document.getElementById('quickEmpresaSelect');
+    const quickEmpDisp = document.getElementById('quickEmpresaDisplay');
+    if (quickEmp) {
+        quickEmp.innerHTML = state.empresas.map(emp => `
+            <option value="${emp.id}" ${emp.active ? 'selected' : ''}>${emp.nome}</option>
+        `).join('');
+        if (quickEmpDisp) quickEmpDisp.innerText = state.config.empresa;
+    }
+
+    const quickCompDisp = document.getElementById('quickCompDisplay');
+    if (quickCompDisp) {
+        const parts = state.competencia.split('-');
+        const month = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][parseInt(parts[1]) - 1];
+        quickCompDisp.innerText = `${month}/${parts[0]}`;
+    }
+}
+
+function updateQuickCompetencia(value) {
+    state.competencia = value;
+    showToast(`Competência alterada para ${getCompetenciaExtenso()}`, 'info');
+    updateDashboard();
+    
+    // Sync settings input if open
+    const configMes = document.getElementById('configMes');
+    if (configMes) configMes.value = value;
+
+    saveState();
+}
+
+// --- Custom Month Picker Logic ---
+let pickerYear = 2026;
+
+function toggleMonthPicker(e) {
+    e.stopPropagation();
+    const picker = document.getElementById('customMonthPicker');
+    const isVisible = picker.style.display === 'block';
+    
+    // Close other pickers or menus if any
+    
+    if (isVisible) {
+        picker.style.display = 'none';
+    } else {
+        picker.style.display = 'block';
+        const parts = state.competencia.split('-');
+        pickerYear = parseInt(parts[0]);
+        renderMonthGrid();
+    }
+}
+
+function renderMonthGrid() {
+    const grid = document.getElementById('monthGrid');
+    const yearDisplay = document.getElementById('pickerYear');
+    const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const parts = state.competencia.split('-');
+    const currentMonth = parseInt(parts[1]) - 1;
+    const currentYear = parseInt(parts[0]);
+
+    yearDisplay.innerText = pickerYear;
+    
+    grid.innerHTML = months.map((m, index) => {
+        const isActive = (index === currentMonth && pickerYear === currentYear);
+        return `
+            <div class="month-item ${isActive ? 'active' : ''}" 
+                 onclick="selectPickerMonth(${index}, event)">
+                ${m}
+            </div>
+        `;
+    }).join('');
+}
+
+function changePickerYear(delta, e) {
+    e.stopPropagation();
+    pickerYear += delta;
+    renderMonthGrid();
+}
+
+function selectPickerMonth(monthIndex, e) {
+    e.stopPropagation();
+    const month = (monthIndex + 1).toString().padStart(2, '0');
+    const newValue = `${pickerYear}-${month}`;
+    
+    updateQuickCompetencia(newValue);
+    document.getElementById('customMonthPicker').style.display = 'none';
+}
+
+// Global click to close picker
+document.addEventListener('click', (e) => {
+    const picker = document.getElementById('customMonthPicker');
+    if (picker && !e.target.closest('.competencia-badge')) {
+        picker.style.display = 'none';
+    }
+});
 
 function updateDashboardAlerts() {
     const alertsCard = document.getElementById('alertsCard');
@@ -641,14 +852,135 @@ function downloadReport() {
 
 // --- Configuration Logic ---
 function renderConfig() {
-    document.getElementById('configEmpresa').value = state.config.empresa;
-    document.getElementById('configCNPJ').value = state.config.cnpj;
-    document.getElementById('configSalMin').value = state.config.salarioMinimo;
-    document.getElementById('configTetoINSS').value = state.config.tetoINSS;
-    document.getElementById('configFGTS').value = state.config.fgts;
-    document.getElementById('configRAT').value = state.config.rat;
-    document.getElementById('configFAP').value = state.config.fap;
-    document.getElementById('configMes').value = state.competencia;
+    const fields = {
+        'configEmpresa': state.config.empresa,
+        'configCNPJ': state.config.cnpj,
+        'configSalMin': state.config.salarioMinimo,
+        'configTetoINSS': state.config.tetoINSS,
+        'configFGTS': state.config.fgts,
+        'configRAT': state.config.rat,
+        'configFAP': state.config.fap,
+        'configMes': state.competencia
+    };
+
+    for (const [id, value] of Object.entries(fields)) {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    }
+
+    renderEmpresas();
+}
+
+function renderEmpresas() {
+    const list = document.getElementById('empresasList');
+    if (!list) return;
+
+    list.innerHTML = state.empresas.map(emp => `
+        <tr>
+            <td><div style="font-weight:700">${emp.nome}</div></td>
+            <td style="font-family:'JetBrains Mono'">${emp.cnpj}</td>
+            <td style="text-align:center">
+                <span class="badge ${emp.active ? 'badge-success' : 'badge-neutral'}">
+                    ${emp.active ? 'Ativa' : 'Inativa'}
+                </span>
+            </td>
+            <td style="text-align:right">
+                <div style="display:flex; gap:8px; justify-content:flex-end">
+                    ${!emp.active ? `<button class="btn btn-sm btn-secondary" onclick="activateEmpresa(${emp.id})">Ativar</button>` : ''}
+                    <button class="btn btn-sm btn-ghost" onclick="deleteEmpresa(${emp.id})" ${emp.active && state.empresas.length > 1 ? 'disabled' : ''}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function showAddEmpresaModal() {
+    const modal = document.getElementById('modal');
+    const content = document.getElementById('modalContent');
+    const title = document.getElementById('modalTitle');
+    
+    title.innerText = 'Cadastrar Nova Empresa';
+    
+    content.innerHTML = `
+        <div class="form-group">
+            <label class="form-label">Nome da Empresa</label>
+            <input type="text" class="form-input" id="newEmpresaNome" placeholder="Ex: Nova Empresa S.A." />
+        </div>
+        <div class="form-group">
+            <label class="form-label">CNPJ</label>
+            <input type="text" class="form-input" id="newEmpresaCNPJ" placeholder="00.000.000/0000-00" />
+        </div>
+        <div style="margin-top:20px; display:flex; gap:10px; justify-content:flex-end">
+            <button class="btn btn-secondary" onclick="document.getElementById('modal').style.display='none'">Cancelar</button>
+            <button class="btn btn-primary" onclick="addEmpresa()">Salvar Empresa</button>
+        </div>
+    `;
+    
+    modal.style.display = 'flex';
+}
+
+function addEmpresa() {
+    const nome = document.getElementById('newEmpresaNome').value;
+    const cnpj = document.getElementById('newEmpresaCNPJ').value;
+
+    if (!nome || !cnpj) {
+        showToast('Preencha todos os campos!', 'error');
+        return;
+    }
+
+    const newEmp = {
+        id: Date.now(),
+        nome,
+        cnpj,
+        active: false,
+        config: {
+            salarioMinimo: 1412,
+            tetoINSS: 7786.02,
+            fgts: 8,
+            rat: 2,
+            fap: 1.00
+        }
+    };
+
+    state.empresas.push(newEmp);
+    document.getElementById('modal').style.display = 'none';
+    showToast('Empresa cadastrada com sucesso!', 'success');
+    renderEmpresas();
+    saveState();
+}
+
+function activateEmpresa(id) {
+    state.empresas.forEach(emp => {
+        emp.active = emp.id === id;
+        if (emp.active) {
+            // Copia as configurações da empresa para o config ativo
+            state.config = { ...emp.config };
+            state.config.empresa = emp.nome;
+            state.config.cnpj = emp.cnpj;
+        }
+    });
+
+    showToast('Empresa ativa alterada!', 'success');
+    renderConfig();
+    updateDashboard(); // Updates dash title and info
+    saveState();
+}
+
+function deleteEmpresa(id) {
+    const emp = state.empresas.find(e => e.id === id);
+    if (emp && emp.active) {
+        showToast('Não é possível excluir a empresa ativa!', 'error');
+        return;
+    }
+
+    if (confirm('Deseja realmente excluir esta empresa?')) {
+        state.empresas = state.empresas.filter(e => e.id !== id);
+        showToast('Empresa excluída!', 'success');
+        renderEmpresas();
+        saveState();
+    }
 }
 
 // --- Conciliação Logic ---
@@ -764,14 +1096,8 @@ function exportConciliacao() {
 
 function updateCompetencia() {
     state.competencia = document.getElementById('configMes').value;
-    updateCompetenciaDisplay();
-}
-
-function updateCompetenciaDisplay() {
-    const display = document.getElementById('competenciaDisplay');
-    const parts = state.competencia.split('-');
-    const month = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'][parseInt(parts[1]) - 1];
-    display.innerText = `${month}/${parts[0]}`;
+    updateDashboard();
+    saveState();
 }
 
 function saveConfig() {
@@ -791,10 +1117,24 @@ function saveConfig() {
     setTimeout(() => {
         hideLoading();
         showToast('Configurações salvas com sucesso!', 'success');
-        showView('dashboard', document.querySelector('[data-view=dashboard]'));
         
-        // Update header info if needed
+        // Salva as configurações de volta no cadastro da empresa ativa
+        const activeEmp = state.empresas.find(e => e.active);
+        if (activeEmp) {
+            activeEmp.nome = state.config.empresa;
+            activeEmp.cnpj = state.config.cnpj;
+            activeEmp.config = {
+                salarioMinimo: state.config.salarioMinimo,
+                tetoINSS: state.config.tetoINSS,
+                fgts: state.config.fgts,
+                rat: state.config.rat,
+                fap: state.config.fap
+            };
+        }
+
+        showView('dashboard', document.querySelector('[data-view=dashboard]'));
         updateDashboard();
+        saveState();
     }, 800);
 }
 
@@ -894,4 +1234,72 @@ function animateValue(id, start, end, isCurrency = false) {
         }
     };
     window.requestAnimationFrame(step);
+}
+
+function excluirDadosCompetencia() {
+    if (confirm('Atenção: Isso excluirá todos os arquivos e dados processados da competência atual e você começará do zero. Deseja continuar?')) {
+        showLoading('Limpando dados da competência...');
+        
+        setTimeout(() => {
+            // Reset files
+            state.files = { planilha: null, pdf: [], ponto: null, encargos: null };
+            
+            // Reset validations
+            state.validations.forEach(v => {
+                v.status = 'pending';
+                v.progress = 0;
+            });
+            
+            // Reset fechamentoSteps
+            state.fechamentoSteps.forEach(s => {
+                if (s.id === 1) s.status = 'active';
+                else s.status = 'locked';
+            });
+            
+            // Reset summary
+            state.summary = {
+                colaboradores: 0,
+                bruto: 0,
+                descontos: 0,
+                liquido: 0
+            };
+            
+            // Reset conciliação
+            state.conciliacao.inss.forEach(i => {
+                i.base = 0; i.segurados = 0; i.patronal = 0; i.ratfap = 0; i.terceiros = 0; i.total = 0;
+            });
+            state.conciliacao.fgts.forEach(f => {
+                f.baseMensal = 0; f.valorMensal = 0; f.baseRescisoria = 0; f.valorRescisorio = 0; f.total = 0;
+            });
+            state.conciliacao.desligados = [];
+            
+            // Reset badges
+            const fechBadge = document.getElementById('fechBadge');
+            if (fechBadge) {
+                fechBadge.innerText = 'Em Andamento';
+                fechBadge.className = 'badge badge-warning';
+            }
+            
+            hideLoading();
+            showToast('Dados da competência foram excluídos.', 'success');
+            
+            // Re-render components
+            renderFilePreviews();
+            checkUploadProgress();
+            renderDashboard();
+            renderValidations();
+            renderFechamentoSteps();
+            updateKPIs();
+            renderConciliacao();
+            
+            // Disable fechamento button if it was enabled
+            const btnFecharFolha = document.getElementById('btnFecharFolha');
+            if (btnFecharFolha) btnFecharFolha.disabled = true;
+            
+            // Go back to dashboard
+            showView('dashboard', document.querySelector('[data-view=dashboard]'));
+            
+            saveState();
+        }, 1000);
+    }
 }

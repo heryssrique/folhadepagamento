@@ -37,46 +37,39 @@
 
     <nav class="sidebar-nav">
       <div class="nav-section-label">PRINCIPAL</div>
-      <a href="#" class="nav-item active" data-view="dashboard" onclick="showView('dashboard', this)">
+      <a href="#" class="nav-item active" data-view="dashboard">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
         Dashboard
       </a>
-      <a href="#" class="nav-item" data-view="upload" onclick="showView('upload', this)">
+      <a href="#" class="nav-item" data-view="upload">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         Upload de Arquivos
         <span class="nav-badge" id="uploadBadge" style="display:none">!</span>
       </a>
-      <a href="#" class="nav-item" data-view="validacao" onclick="showView('validacao', this)">
+      <a href="#" class="nav-item" data-view="validacao">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"/></svg>
         Validação
         <span class="nav-badge" id="validBadge" style="display:none">0</span>
       </a>
-      <a href="#" class="nav-item" data-view="conciliacao" onclick="showView('conciliacao', this)">
+      <a href="#" class="nav-item" data-view="conciliacao">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Conciliação
       </a>
-      <a href="#" class="nav-item" data-view="fechamento" onclick="showView('fechamento', this)">
+      <a href="#" class="nav-item" data-view="fechamento">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
         Fechamento
       </a>
-      <a href="#" class="nav-item" data-view="relatorios" onclick="showView('relatorios', this)">
+      <a href="#" class="nav-item" data-view="relatorios">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
         Relatórios
       </a>
 
       <div class="nav-section-label" style="margin-top:12px">CONFIGURAÇÕES</div>
-      <a href="#" class="nav-item" data-view="configuracoes" onclick="showView('configuracoes', this)">
+      <a href="#" class="nav-item" data-view="configuracoes">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
         Configurações
       </a>
     </nav>
-
-    <div class="sidebar-footer">
-      <div class="competencia-badge">
-        <span class="comp-label">Competência</span>
-        <span class="comp-value" id="competenciaDisplay">Abr/2026</span>
-      </div>
-    </div>
   </aside>
 
   <!-- Main Content -->
@@ -89,11 +82,38 @@
         </button>
         <div id="breadcrumb" class="breadcrumb">Dashboard</div>
       </div>
-      <div class="topbar-right">
-        <div class="status-pill" id="statusPill">
-          <span class="status-dot"></span>
-          <span id="statusText">Aguardando Arquivos</span>
+        <div class="topbar-right">
+        <!-- Quick Context Switcher (Styled) -->
+        <div class="quick-switcher" style="display: flex; gap: 10px; margin-right: 16px;">
+          <!-- Empresa Selector -->
+          <div class="competencia-badge" style="padding: 6px 12px; min-width: 180px; position: relative; cursor: pointer;">
+            <span class="comp-label" style="font-size: 0.6rem;">Empresa Ativa</span>
+            <select id="quickEmpresaSelect" onchange="activateEmpresa(parseInt(this.value))" style="position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%;">
+              <!-- populated by JS -->
+            </select>
+            <div id="quickEmpresaDisplay" class="comp-value" style="font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; width: 100%;">Minha Empresa Ltda</div>
+          </div>
+
+          <!-- Competencia Selector (Custom) -->
+          <div class="competencia-badge" style="padding: 6px 12px; min-width: 120px; position: relative; cursor: pointer;" onclick="toggleMonthPicker(event)">
+            <span class="comp-label" style="font-size: 0.6rem;">Competência</span>
+            <div id="quickCompDisplay" class="comp-value" style="font-size: 0.85rem;">Abr/2026</div>
+            
+            <!-- Custom Month Picker Dropdown -->
+            <div id="customMonthPicker" class="custom-picker" style="display: none;">
+              <div class="picker-header">
+                <button class="btn-icon-sm" onclick="changePickerYear(-1, event)">❮</button>
+                <span id="pickerYear">2026</span>
+                <button class="btn-icon-sm" onclick="changePickerYear(1, event)">❯</button>
+              </div>
+              <div class="month-grid" id="monthGrid">
+                <!-- populated by JS -->
+              </div>
+            </div>
+          </div>
         </div>
+
+        <div class="status-pill" id="statusPill">
         <button class="btn-icon" title="Notificações">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
         </button>
@@ -109,7 +129,7 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Dashboard</h1>
-            <p class="view-subtitle">Visão geral do fechamento da folha – Competência <span id="dashComp">Abril/2026</span></p>
+            <p class="view-subtitle"><span id="dashEmpresaName">Minha Empresa Ltda</span> – Competência <span id="dashComp">Abril/2026</span></p>
           </div>
           <div class="header-actions">
             <button class="btn btn-secondary" onclick="showView('upload', document.querySelector('[data-view=upload]'))">
@@ -479,6 +499,7 @@
           </div>
         </div>
       </div>
+      </div>
 
       <!-- RELATORIOS VIEW -->
       <div id="view-relatorios" class="view">
@@ -597,11 +618,34 @@
             <p class="view-subtitle">Configure os parâmetros da folha de pagamento</p>
           </div>
           <div class="header-actions">
+            <button class="btn btn-danger" onclick="excluirDadosCompetencia()">Reiniciar Competência</button>
             <button class="btn btn-primary" onclick="saveConfig()">Salvar Configurações</button>
           </div>
         </div>
 
         <div class="config-grid">
+          <!-- Gerenciamento de Empresas -->
+          <div class="card" style="grid-column: 1 / -1; margin-bottom: 24px;">
+            <div class="card-header">
+              <h3 class="card-title">🏢 Empresas Cadastradas</h3>
+              <button class="btn btn-sm btn-primary" onclick="showAddEmpresaModal()">+ Nova Empresa</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nome da Empresa</th>
+                    <th>CNPJ</th>
+                    <th style="text-align:center">Status</th>
+                    <th style="text-align:right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="empresasList">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div class="card">
             <div class="card-header"><h3 class="card-title">🗓️ Competência</h3></div>
             <div class="form-group">
