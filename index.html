@@ -432,8 +432,8 @@
             </div>
             
             <div class="table-responsive">
-              <table class="recon-table">
-                <thead>
+              <table class="data-table">
+                <thead id="headINSS">
                   <tr>
                     <th style="width:30%">Métrica / Rubrica</th>
                     <th style="text-align:right">Folha Interna</th>
@@ -463,8 +463,8 @@
             </div>
             
             <div class="table-responsive">
-              <table class="recon-table">
-                <thead>
+              <table class="data-table">
+                <thead id="headFGTS">
                   <tr>
                     <th style="width:30%">Métrica de FGTS</th>
                     <th style="text-align:right">Folha Interna</th>
@@ -478,6 +478,36 @@
                 </tbody>
               </table>
             </div>
+            
+            <!-- Highlight Box para Guia de Pagamento -->
+            <div style="background: rgba(14, 165, 233, 0.05); border: 1px solid rgba(14, 165, 233, 0.3); border-radius: 8px; padding: 16px; margin-top: 16px;">
+              <h4 style="margin: 0 0 12px 0; color: #0ea5e9; font-size: 1rem;">Cálculo da Guia de FGTS a Pagar (eSocial / FGTS Digital)</h4>
+              
+              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                <span style="color: var(--text-secondary);">FGTS Mensal Apurado (Folha)</span>
+                <span id="calcFgtsMensal" style="font-family: monospace;">R$ 0,00</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.8rem; padding-left: 15px;">
+                <span style="color: var(--text-muted);">FGTS Digital 8%</span>
+                <span id="calcFgts8" style="font-family: monospace; color: var(--text-muted);">R$ 0,00</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.8rem; padding-left: 15px;">
+                <span style="color: var(--text-muted);">FGTS Digital 2% (Aprendiz)</span>
+                <span id="calcFgts2" style="font-family: monospace; color: var(--text-muted);">R$ 0,00</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                <span style="color: var(--text-secondary);">(-) FGTS Recolhido em GRRF (Desligados no Mês)</span>
+                <span id="calcFgtsGrrf" style="font-family: monospace; color: #ef4444;">- R$ 0,00</span>
+              </div>
+              
+              <div style="height: 1px; background: rgba(14, 165, 233, 0.2); margin: 12px 0;"></div>
+              
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; color: var(--text-primary);">Total Líquido da Guia Mensal</span>
+                <span id="valorGuiaFGTS" style="font-size: 1.5rem; font-weight: 700; color: #0ea5e9; font-family: monospace;">R$ 0,00</span>
+              </div>
+            </div>
+
           </div>
         </div>
 
