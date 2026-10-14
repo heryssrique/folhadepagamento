@@ -122,7 +122,8 @@ async function saveState() {
         fechamentoSteps: state.fechamentoSteps,
         conciliacao: state.conciliacao,
         fileMetadata: {
-        planilha: state.files.planilha.length > 0 ? state.files.planilha.map(f => ({ name: f.name, size: f.size })) : null,
+            planilha: state.files.planilha.length > 0 ? state.files.planilha.map(f => ({ name: f.name, size: f.size })) : null,
+            pdf: state.files.pdf.length > 0 ? state.files.pdf.map(f => ({ name: f.name, size: f.size })) : null,
             encargos: state.files.encargos ? { name: state.files.encargos.name, size: state.files.encargos.size } : null,
             pdfCount: state.files.pdf.length
         }
@@ -155,8 +156,9 @@ function loadCompetenciaData(comp) {
             state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
             if (d.fileMetadata) {
             if (d.fileMetadata.planilha) state.files.planilha = d.fileMetadata.planilha.map(p => ({ name: p.name, size: p.size, type: 'virtual' }));
+                if (d.fileMetadata.pdf) state.files.pdf = d.fileMetadata.pdf.map(p => ({ name: p.name, size: p.size, type: 'virtual' }));
+                else if (d.fileMetadata.pdfCount > 0) state.files.pdf = Array(d.fileMetadata.pdfCount).fill({ name: 'Arquivo PDF já enviado', size: 0, type: 'virtual' });
                 if (d.fileMetadata.encargos) state.files.encargos = { name: d.fileMetadata.encargos.name, size: d.fileMetadata.encargos.size, type: 'virtual' };
-                if (d.fileMetadata.pdfCount > 0) state.files.pdf = Array(d.fileMetadata.pdfCount).fill({ name: 'Arquivo PDF já enviado', size: 0, type: 'virtual' });
             }
             return true; // Encontrou dados
         } catch(e) { console.error('Erro ao carregar competência:', e); }
@@ -256,11 +258,13 @@ function applyState(data) {
         if (data.fileMetadata.planilha) {
             state.files.planilha = data.fileMetadata.planilha.map(p => ({ name: p.name, size: p.size, type: 'virtual' }));
         }
+        if (data.fileMetadata.pdf) {
+            state.files.pdf = data.fileMetadata.pdf.map(p => ({ name: p.name, size: p.size, type: 'virtual' }));
+        } else if (data.fileMetadata.pdfCount > 0) {
+            state.files.pdf = Array(data.fileMetadata.pdfCount).fill({ name: 'Arquivo PDF já enviado', size: 0, type: 'virtual' });
+        }
         if (data.fileMetadata.encargos) {
             state.files.encargos = { name: data.fileMetadata.encargos.name, size: data.fileMetadata.encargos.size, type: 'virtual' };
-        }
-        if (data.fileMetadata.pdfCount > 0) {
-            state.files.pdf = Array(data.fileMetadata.pdfCount).fill({ name: 'Arquivo PDF já enviado', size: 0, type: 'virtual' });
         }
     }
 
@@ -417,8 +421,12 @@ function routeFilesAutomatically(fileList) {
         const name = file.name.toLowerCase();
         const ext  = name.split('.').pop();
 
+        // Planilha de Bases/Confronto: deve alimentar a conciliação, não o analítico
+        if (/base|bases|confronto/i.test(name) && (ext === 'xlsx' || ext === 'xls' || ext === 'csv')) {
+            routed.planilha = file;
+        }
         // Encargos: GFD, FGTS Digital, guias
-        if (/fgts|gfd|guia|encargo|dctf|esocial/i.test(name) && (ext === 'xlsx' || ext === 'pdf')) {
+        else if (/fgts|gfd|guia|encargo|dctf|esocial/i.test(name) && (ext === 'xlsx' || ext === 'pdf')) {
             routed.encargos = file;
         }
         // PDF ou TXT → sempre analítico
@@ -1338,19 +1346,27 @@ async function processFiles() {
                 showToast(`✅ GRRF: ${grrf.qtdDesligados} desligados — Total FGTS Rescisório: ${formatCurrency(grrf.totalFGTS)}`, 'success');
             } else {
                 // Planilha tabular normal de confronto de bases
-                // Encontrar a linha de cabeçalho dinamicamente (procurando por colunas conhecidas)
-                let headerRowIndex = 0;
+                // Localizar a linha de cabeçalho da tabela de bases, mesmo após o bloco de totais.
+                const normalizeHeader = value => String(value || '').trim().toUpperCase().replace(/[\s_]+/g, '');
+                const expectedHeaders = ['NOME', 'CODSITUACAO', 'CODTIPO', 'BASEINSS', 'BASEFGTS'];
+                let headerRowIndex = -1;
+                let bestHeaderScore = 0;
                 let headers = [];
-                for (let i = 0; i < Math.min(10, jsonData.length); i++) {
+                for (let i = 0; i < jsonData.length; i++) {
                     const row = jsonData[i] || [];
-                    if (row.some(h => /BASEFGTS|NOME|CODTIPO|CODSITUACAO/i.test(String(h)))) {
+                    const normalized = row.map(normalizeHeader);
+                    const score = expectedHeaders.filter(field => normalized.includes(field)).length;
+                    if (score > bestHeaderScore) {
+                        bestHeaderScore = score;
                         headerRowIndex = i;
                         headers = row;
-                        break;
                     }
                 }
-                
-                if (headers.length === 0) headers = jsonData[0] || [];
+
+                if (headerRowIndex < 0 || bestHeaderScore < 3) {
+                    headerRowIndex = 0;
+                    headers = jsonData[0] || [];
+                }
                 
                 // Mapear campos para validação de layout
                 const requiredBasesFields = Object.keys(state.layoutResults.bases.fields);
@@ -1361,18 +1377,20 @@ async function processFiles() {
                 });
 
                 const idx = {
-                    nome: headers.findIndex(h => /^NOME$/i.test(String(h).trim())),
-                    inss: headers.findIndex(h => /^BASEINSS$/i.test(h) || /base\s+inss/i.test(h)),
-                    fgts: headers.findIndex(h => /^BASEFGTS$/i.test(h) || /base\s+fgts/i.test(h)),
-                    fgtsAv: headers.findIndex(h => /^BASEFGTSAVPREVIO$/i.test(h)),
-                    fgts13Av: headers.findIndex(h => /^BASEFGTS13AVPREVIO$/i.test(h)),
-                    fgts13: headers.findIndex(h => /^BASEFGTS13$/i.test(h)),
-                    irrf: headers.findIndex(h => /^BASEIRRF$/i.test(h) || /base\s+irrf/i.test(h)),
-                    bruto: headers.findIndex(h => /total\s+proventos|bruto|vencimentos/i.test(h)),
-                    descontos: headers.findIndex(h => /total\s+descontos|descontos/i.test(h)),
-                    liquido: headers.findIndex(h => /valor\s+liquido|liquido/i.test(h)),
-                    situacao: headers.findIndex(h => /^CODSITUACAO$/i.test(h) || /SITUA[ÇC][ÃA]O/i.test(h)),
-                    codtipo: headers.findIndex(h => /^CODTIPO$/i.test(h))
+                    nome: headers.findIndex(h => normalizeHeader(h) === 'NOME'),
+                    inss: headers.findIndex(h => normalizeHeader(h) === 'BASEINSS'),
+                    inss13: headers.findIndex(h => normalizeHeader(h) === 'BASEINSS13'),
+                    inssAutonomo: headers.findIndex(h => normalizeHeader(h) === 'BASEINSSAUTONOMO'),
+                    fgts: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS'),
+                    fgtsAv: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTSAVPREVIO'),
+                    fgts13Av: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS13AVPREVIO'),
+                    fgts13: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS13'),
+                    irrf: headers.findIndex(h => normalizeHeader(h) === 'BASEIRRF'),
+                    bruto: headers.findIndex(h => /total\s+proventos|bruto|vencimentos/i.test(String(h || ''))),
+                    descontos: headers.findIndex(h => /total\s+descontos|descontos/i.test(String(h || ''))),
+                    liquido: headers.findIndex(h => /valor\s+liquido|liquido/i.test(String(h || ''))),
+                    situacao: headers.findIndex(h => normalizeHeader(h) === 'CODSITUACAO'),
+                    codtipo: headers.findIndex(h => normalizeHeader(h) === 'CODTIPO')
                 };
                 const rows = jsonData.slice(headerRowIndex + 1);
                 
@@ -1407,7 +1425,9 @@ async function processFiles() {
                         else if (sit === 'D' || sit === 'DESLIGADO' || sit === 'DEMITIDO') excelSummary.desligados++;
                     }
 
-                    if (idx.inss !== -1)      excelBases.inss        += parseV(row[idx.inss]);
+                    // A conciliação compara a base mensal regular; 13º, autônomos e diretor são rubricas separadas.
+                    const tipoInss = idx.codtipo !== -1 ? String(row[idx.codtipo] || '').toUpperCase().trim() : '';
+                    if (idx.inss !== -1 && tipoInss !== 'D') excelBases.inss += parseV(row[idx.inss]);
                     if (idx.irrf !== -1)      excelBases.irrf        += parseV(row[idx.irrf]);
                     if (idx.bruto !== -1)     excelSummary.bruto     += parseV(row[idx.bruto]);
                     if (idx.descontos !== -1) excelSummary.descontos += parseV(row[idx.descontos]);
@@ -1644,8 +1664,13 @@ function simulateValidation(id) {
         }
     }
     else if (id === 'layoutGRRF') {
-        // GRRF pode ter sido roteado para state.files.pdf (xlsx) ou state.files.planilha (csv/drop)
-        const hasGRRF = [...state.files.pdf, ...state.files.planilha].some(f => f.name.toLowerCase().includes('grrf'));
+        // GRRF pode estar em pdf, planilha ou encargos, dependendo do tipo de upload/roteamento.
+        const uploadedFiles = [
+            ...(state.files.pdf || []),
+            ...(state.files.planilha || []),
+            ...(state.files.encargos ? [state.files.encargos] : [])
+        ];
+        const hasGRRF = uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
         const fields = state.layoutResults.grrf.fields;
         const missing = Object.entries(fields).filter(([name, found]) => !found).map(([name]) => name);
         
