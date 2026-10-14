@@ -803,16 +803,20 @@ async function extractGRRFSummary(file) {
 async function extractExcelSummary(file) {
     const excelBuffer = await file.arrayBuffer();
     const workbook = XLSX.read(excelBuffer);
-    
-    const summary = { 
-        bruto: 0, 
-        descontos: 0, 
-        liquido: 0, 
-        liquidoProLabore: 0, 
-        colaboradores: 0, 
-        ativos: 0, 
-        afastados: 0, 
-        desligados: 0, 
+
+    // Planilha de Bases é sempre tabular — pula o scan de rótulos para não
+    // confundir valores de data com as labels "Proventos"/"Liquido"
+    const isBases = file.name.toLowerCase().includes('base');
+
+    const summary = {
+        bruto: 0,
+        descontos: 0,
+        liquido: 0,
+        liquidoProLabore: 0,
+        colaboradores: 0,
+        ativos: 0,
+        afastados: 0,
+        desligados: 0,
         bases: { inss: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0 },
         rawHeaders: new Set()
     };
@@ -920,8 +924,8 @@ async function extractExcelSummary(file) {
             }
         }
 
-        // 2. Se não encontrou rótulos, assume que é tabular
-        if (!foundLabels.bruto && !foundLabels.liquido) {
+        // 2. Se não encontrou rótulos (ou se for Planilha de Bases, que é sempre tabular), assume tabular
+        if (isBases || (!foundLabels.bruto && !foundLabels.liquido)) {
             const headers = rows[0] || [];
             // Coletar cabeçalhos crus para validação de layout (Planilha de Bases)
             headers.forEach(h => { const k = String(h||'').trim(); if (k) summary.rawHeaders.add(k); });
