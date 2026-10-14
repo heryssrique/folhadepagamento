@@ -4,11 +4,11 @@
  */
 
 // --- Constants & State ---
-const diagnosticsEnabled = (() => {
+const isDiagnosticsEnabled = () => {
     try { return localStorage.getItem('folhapay:debug') === '1'; } catch (_) { return false; }
-})();
+};
 const debugLog = (event, details = {}) => {
-    if (!diagnosticsEnabled) return;
+    if (!isDiagnosticsEnabled()) return;
     const allowed = ['slot', 'count', 'real', 'virtual', 'extension', 'sheets', 'headerRow', 'matchedColumns', 'dataRows', 'bases', 'inss', 'fgts', 'fgts13', 'irrf', 'outcome', 'errorType'];
     const safe = {};
     allowed.forEach(key => {
@@ -19,7 +19,18 @@ const debugLog = (event, details = {}) => {
     });
     console.info('[FolhaPay debug]', event, safe);
 };
-if (diagnosticsEnabled) console.info('[FolhaPay debug] Diagnóstico ativado. Desative com localStorage.removeItem("folhapay:debug") e recarregue.');
+window.setFolhaPayDebug = (enabled) => {
+    try {
+        if (enabled) localStorage.setItem('folhapay:debug', '1');
+        else localStorage.removeItem('folhapay:debug');
+        console.info(`[FolhaPay debug] Diagnóstico ${enabled ? 'ativado' : 'desativado'} nesta origem.`);
+        return isDiagnosticsEnabled();
+    } catch (_) {
+        console.warn('[FolhaPay debug] Não foi possível alterar o diagnóstico neste navegador.');
+        return false;
+    }
+};
+if (isDiagnosticsEnabled()) console.info('[FolhaPay debug] Diagnóstico ativado nesta origem.');
 
 const state = {
     currentView: 'dashboard',
@@ -1101,6 +1112,7 @@ async function processFiles() {
     if (!hasRealAnalitico && !hasRealPlanilha) {
         showToast('Envie novamente os arquivos reais da competência para processar os dados.', 'warning');
         showView('upload', document.querySelector('[data-view=upload]'));
+        debugLog('process.finished', { outcome: 'no-readable-files' });
         return;
     }
 
@@ -1661,6 +1673,7 @@ async function processFiles() {
         runAllValidations();
         renderConciliacao(); // Garante que as tabelas e a guia sejam renderizadas com os novos dados
         saveState();
+        debugLog('process.finished', { outcome: 'success' });
 
     } catch (err) {
         debugLog('process.failed', { outcome: 'exception', errorType: err && err.name ? String(err.name).slice(0, 40) : 'unknown' });
