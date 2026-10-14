@@ -75,7 +75,7 @@ const state = {
         bases: { 
             ok: false, 
             fields: {
-                'CODCOLIGADA': false, 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false,
+                'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false,
                 'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'BASEFGTSDIFSAL': false,
                 'FGTS_MES': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'FGTSDIF': false,
                 'BASEINSS': false, 'BASEINSS13': false, 'BASE_INSS_AUTONOMO': false,
@@ -178,7 +178,7 @@ function loadCompetenciaData(comp) {
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     state.layoutResults = {
         analitico: { ok: false, fields: { 'PRO LABORE': false, 'Proventos': false, 'Descontos': false, 'Base FGTS': false, 'Base FGTS 13º': false, 'Base INSS - Envelope': false, 'Base INSS 13º - Envelope': false, 'INSS': false, 'INSS DIRETOR/AUT': false, 'INSS 13 SALARIO': false, 'IRRF': false } },
-        bases: { ok: false, fields: { 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false, 'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'FGTS': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'BASEINSS': false, 'BASEINSS13': false, 'INSS': false, 'INSS13': false, 'INSSFERIAS': false, 'BASE_INSS_AUTONOMO': false, 'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false, 'IRRF13': false, 'IRRFFERIAS': false } },
+        bases: { ok: false, fields: { 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false, 'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'BASEFGTSDIFSAL': false, 'FGTS_MES': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'FGTSDIF': false, 'BASEINSS': false, 'BASEINSS13': false, 'BASE_INSS_AUTONOMO': false, 'INSS': false, 'INSS13': false, 'INSSFERIAS': false, 'INSSDIFSAL': false, 'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false, 'IRRF13': false, 'IRRFFERIAS': false } },
         grrf: { ok: false, fields: { 'NOME': false, 'CHAPA': false, 'CODTIPO': false, 'FGTS QUITACAO': false, 'FGTS MES ANTERIOR': false, 'FGTS AVISO PREVIO': false, 'FGTS ARTIGO 22': false, 'FGTS 13 SALARIO INDENIZADO': false, 'FGTS 13 SAL RESCISAO': false } }
     };
     return false; // Sem dados
@@ -1622,7 +1622,7 @@ function simulateValidation(id) {
             v.desc = '<strong>Motivo:</strong> Planilha de bases não enviada. O sistema está usando apenas dados do Analítico.';
         } else if (missing.length === 0) {
             v.status = 'ok';
-            v.desc = 'Todos os 27 campos obrigatórios localizados na planilha de bases.';
+            v.desc = 'Todos os 26 campos obrigatórios localizados na planilha de bases.';
         } else {
             v.status = missing.length < 10 ? 'warning' : 'error';
             v.desc = `<strong>Motivo:</strong> Colunas ausentes na Planilha de Bases: <span class="text-danger">${missing.join(', ')}</span>.`;
