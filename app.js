@@ -4,6 +4,23 @@
  */
 
 // --- Constants & State ---
+const diagnosticsEnabled = (() => {
+    try { return localStorage.getItem('folhapay:debug') === '1'; } catch (_) { return false; }
+})();
+const debugLog = (event, details = {}) => {
+    if (!diagnosticsEnabled) return;
+    const allowed = ['slot', 'count', 'real', 'virtual', 'extension', 'sheets', 'headerRow', 'matchedColumns', 'dataRows', 'bases', 'inss', 'fgts', 'fgts13', 'irrf', 'outcome', 'errorType'];
+    const safe = {};
+    allowed.forEach(key => {
+        const value = details[key];
+        if (typeof value === 'string' && value.length <= 40) safe[key] = value;
+        else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) safe[key] = value;
+        else if (Array.isArray(value)) safe[key] = value.filter(v => typeof v === 'string' && v.length <= 40).slice(0, 40);
+    });
+    console.info('[FolhaPay debug]', event, safe);
+};
+if (diagnosticsEnabled) console.info('[FolhaPay debug] Diagnóstico ativado. Desative com localStorage.removeItem("folhapay:debug") e recarregue.');
+
 const state = {
     currentView: 'dashboard',
     competencia: '2026-04',
@@ -318,7 +335,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    console.log('FolhaPay: App Logic Initialized');
+    debugLog('app.initialized', { outcome: 'ready' });
 });
 
 // --- View Navigation ---
@@ -416,6 +433,7 @@ function routeFilesAutomatically(fileList) {
     if (!files.length) return;
 
     const routed = { pdf: [], planilha: null, encargos: null };
+    const extensions = files.map(file => String(file.name || '').split('.').pop().toLowerCase());
 
     files.forEach(file => {
         const name = file.name.toLowerCase();
@@ -443,6 +461,13 @@ function routeFilesAutomatically(fileList) {
         }
     });
 
+    debugLog('upload.routed', {
+        count: files.length,
+        real: files.filter(file => file.type !== 'virtual').length,
+        virtual: files.filter(file => file.type === 'virtual').length,
+        extension: [...new Set(extensions)].join(',')
+    });
+
     // Aplicar roteamento substituindo metadados virtuais pelos arquivos reais selecionados.
     const isVirtual = file => file && file.type === 'virtual';
     if (routed.pdf.length) {
@@ -468,7 +493,14 @@ function routeFilesAutomatically(fileList) {
 
 function processUploadedFiles(fileList, type) {
     const files = Array.from(fileList);
-    
+    debugLog('upload.selected', {
+        slot: type,
+        count: files.length,
+        real: files.filter(file => file && file.type !== 'virtual').length,
+        virtual: files.filter(file => file && file.type === 'virtual').length,
+        extension: [...new Set(files.map(file => String(file.name || '').split('.').pop().toLowerCase()))].join(',')
+    });
+
     const realPlanilhas = (state.files.planilha || []).filter(file => file && file.type !== 'virtual');
     const realPdfs = (state.files.pdf || []).filter(file => file && file.type !== 'virtual');
     if (type === 'planilha') {
@@ -806,7 +838,7 @@ async function extractGRRFSummary(file) {
                            result.fgts13Indenizado + result.fgts13Rescisao;
     }
 
-    console.log('📋 GRRF Summary:', JSON.stringify(result));
+    debugLog('grrf.extracted', { outcome: result.isGRRF ? 'recognized' : 'not-recognized', count: result.qtdDesligados, fgts: result.totalFGTS });
     return result;
 }
 
@@ -846,6 +878,8 @@ async function extractExcelSummary(file) {
         if (jsonData.length === 0) continue;
 
         const rows = jsonData;
+        let diagnosticHeaderRow = -1;
+        let diagnosticMatchedColumns = [];
         let sheetSummary = { bruto: 0, descontos: 0, liquido: 0, liquidoProLabore: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0, bases: { inss: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0 } };
         let foundLabels = { bruto: false, descontos: false, liquido: false, ativos: false, proLabore: false };
 
@@ -943,6 +977,7 @@ async function extractExcelSummary(file) {
                 (r||[]).some(c => /^NOME$|^BASEFGTS$|^BASEINSS$/i.test(String(c||'').trim()))
             );
             const hIdx = headerRowIdx >= 0 ? headerRowIdx : 0;
+            diagnosticHeaderRow = hIdx;
             const headers = rows[hIdx] || [];
             // Coletar cabeçalhos crus para validação de layout (Planilha de Bases)
             headers.forEach(h => { const k = String(h||'').trim(); if (k) summary.rawHeaders.add(k); });
@@ -963,6 +998,7 @@ async function extractExcelSummary(file) {
                 proLabore: findCols(/pro\s*labore/i),
                 situacao: headers.findIndex(h => /^CODSITUACAO$/i.test(h) || /SITUA[ÇC][ÃA]O/i.test(h))
             };
+            diagnosticMatchedColumns = Object.entries(idx).filter(([, cols]) => Array.isArray(cols) ? cols.length > 0 : cols !== -1).map(([key]) => key);
             const dataRows = rows.slice(hIdx + 1);
             dataRows.forEach(row => {
                 idx.bruto.forEach(i => { sheetSummary.bruto += parseVal(row[i]); });
@@ -993,8 +1029,20 @@ async function extractExcelSummary(file) {
         const nameIsResumo = /RESUMO|TOTAL|GERAL/i.test(sheetName);
 
         if (isResumo || (nameIsResumo && totalBrutoAcumulado > 0 && sheetSummary.bruto > 0)) {
-            console.log(`Skipping summary sheet: ${sheetName}`);
+            debugLog('excel.sheet-skipped', { outcome: 'summary' });
             continue;
+        }
+        if (isBases || (!foundLabels.bruto && !foundLabels.liquido)) {
+            debugLog('excel.sheet-parsed', {
+                headerRow: diagnosticHeaderRow,
+                matchedColumns: diagnosticMatchedColumns,
+                dataRows: Math.max(0, rows.length - diagnosticHeaderRow - 1),
+                bases: isBases,
+                inss: sheetSummary.bases.inss,
+                fgts: sheetSummary.bases.fgts,
+                fgts13: sheetSummary.bases.fgts13,
+                irrf: sheetSummary.bases.irrf
+            });
         }
 
         // Adicionar valores da aba ao resumo global
@@ -1042,6 +1090,12 @@ async function processFiles() {
     
     const hasRealAnalitico = state.files.pdf.some(file => !isVirtual(file));
     const hasRealPlanilha = state.files.planilha.some(file => !isVirtual(file));
+    debugLog('process.started', {
+        count: state.files.pdf.length + state.files.planilha.length,
+        real: state.files.pdf.filter(file => !isVirtual(file)).length + state.files.planilha.filter(file => !isVirtual(file)).length,
+        virtual: state.files.pdf.filter(isVirtual).length + state.files.planilha.filter(isVirtual).length,
+        outcome: hasRealAnalitico || hasRealPlanilha ? 'eligible' : 'no-readable-files'
+    });
 
     // Metadados restaurados não são arquivos legíveis; uploads reais recentes continuam processáveis.
     if (!hasRealAnalitico && !hasRealPlanilha) {
@@ -1253,7 +1307,13 @@ async function processFiles() {
                         state.data.grrf = grrfData;
                     }
                 }
-                console.log('📊 Excel Summary extraído:', JSON.stringify(summary));
+                debugLog('excel.summary', {
+                    count: summary.colaboradores,
+                    inss: summary.bases.inss,
+                    fgts: summary.bases.fgts,
+                    fgts13: summary.bases.fgts13,
+                    irrf: summary.bases.irrf
+                });
 
                 const hasFinancialData = summary.bruto > 0 || summary.liquido > 0;
 
@@ -1270,8 +1330,8 @@ async function processFiles() {
                     pdfBases.irrf    += summary.bases.irrf;
                 } else {
                     // Arquivo sem dados financeiros reconhecidos — provavelmente não é um Analítico
-                    showToast(`⚠️ "${file.name}" não reconhecido como Analítico (sem Proventos/Líquido). Ignorado.`, 'warning');
-                    console.warn(`⚠️ Arquivo ignorado (sem dados financeiros): ${file.name} — ${summary.colaboradores} linhas detectadas`);
+                    showToast('⚠️ Arquivo não reconhecido como Analítico (sem Proventos/Líquido). Ignorado.', 'warning');
+                    debugLog('excel.ignored', { count: summary.colaboradores, outcome: 'no-financial-data' });
                 }
             }
         }
@@ -1579,6 +1639,13 @@ async function processFiles() {
         });
 
 
+        debugLog('reconciliation.assigned', {
+            inss: excelBases.inss,
+            fgts: excelBases.fgts,
+            fgts13: excelBases.fgts13,
+            irrf: excelBases.irrf,
+            outcome: state.files.planilha.some(file => !isVirtual(file)) ? 'with-bases-file' : 'without-bases-file'
+        });
         updateKPIs();
         updateStep(1, 'done');
         updateStep(2, 'active');
@@ -1596,7 +1663,7 @@ async function processFiles() {
         saveState();
 
     } catch (err) {
-        console.error('Erro no processamento mestre:', err);
+        debugLog('process.failed', { outcome: 'exception', errorType: err && err.name ? String(err.name).slice(0, 40) : 'unknown' });
         hideLoading();
         showToast('Falha ao ler o Analítico. Verifique o formato do PDF.', 'error');
     }
