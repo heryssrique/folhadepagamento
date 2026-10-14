@@ -443,10 +443,15 @@ function routeFilesAutomatically(fileList) {
         }
     });
 
-    // Aplicar roteamento
-    if (routed.pdf.length)    state.files.pdf      = [...state.files.pdf, ...routed.pdf];
-    if (routed.planilha)      state.files.planilha = [...state.files.planilha, routed.planilha];
-    if (routed.encargos)      state.files.encargos = routed.encargos;
+    // Aplicar roteamento substituindo metadados virtuais pelos arquivos reais selecionados.
+    const isVirtual = file => file && file.type === 'virtual';
+    if (routed.pdf.length) {
+        state.files.pdf = [...state.files.pdf.filter(file => !isVirtual(file)), ...routed.pdf];
+    }
+    if (routed.planilha) {
+        state.files.planilha = [...state.files.planilha.filter(file => !isVirtual(file)), routed.planilha];
+    }
+    if (routed.encargos) state.files.encargos = routed.encargos;
 
     // Toast descritivo
     const parts = [];
@@ -464,10 +469,12 @@ function routeFilesAutomatically(fileList) {
 function processUploadedFiles(fileList, type) {
     const files = Array.from(fileList);
     
+    const realPlanilhas = (state.files.planilha || []).filter(file => file && file.type !== 'virtual');
+    const realPdfs = (state.files.pdf || []).filter(file => file && file.type !== 'virtual');
     if (type === 'planilha') {
-        state.files.planilha = [...(state.files.planilha || []), ...files];
+        state.files.planilha = [...realPlanilhas, ...files];
     } else if (type === 'pdf') {
-        state.files.pdf = [...state.files.pdf, ...files];
+        state.files.pdf = [...realPdfs, ...files];
     } else {
         state.files[type] = files[0];
     }
@@ -583,26 +590,26 @@ function removeFile(key, index) {
     }
     renderFilePreviews();
     checkUploadProgress();
+    saveState();
 }
 
 function clearAllFiles() {
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     renderFilePreviews();
     checkUploadProgress();
+    saveState();
 }
 
 function checkUploadProgress() {
-    const hasPlanilha = state.files.planilha.length > 0;
+    const hasPlanilha = state.files.planilha.some(file => file && file.type !== 'virtual');
+    const hasReadableFile = [...state.files.pdf, ...state.files.planilha]
+        .some(file => file && file.type !== 'virtual');
     const processBtn = document.getElementById('processBtn');
-    processBtn.disabled = !hasPlanilha;
+    if (processBtn) processBtn.disabled = !hasReadableFile;
 
     // Update status badge in sidebar
     const uploadBadge = document.getElementById('uploadBadge');
-    if (!hasPlanilha) {
-        uploadBadge.style.display = 'block';
-    } else {
-        uploadBadge.style.display = 'none';
-    }
+    if (uploadBadge) uploadBadge.style.display = hasPlanilha ? 'none' : 'block';
 
     // Update Topbar Status
     const statusPill = document.getElementById('statusPill');
@@ -611,13 +618,8 @@ function checkUploadProgress() {
         const statusText = document.getElementById('statusText');
 
         if (statusDot && statusText) {
-            if (hasPlanilha) {
-                statusDot.className = 'status-dot green';
-                statusText.innerText = 'Arquivos Prontos';
-            } else {
-                statusDot.className = 'status-dot';
-                statusText.innerText = 'Aguardando Arquivos';
-            }
+            statusDot.className = hasReadableFile ? 'status-dot green' : 'status-dot';
+            statusText.innerText = hasReadableFile ? 'Arquivos Prontos' : 'Aguardando Arquivos';
         }
     }
 }
@@ -1038,11 +1040,12 @@ async function processFiles() {
     
     const hasMasterSource = state.files.pdf.length > 0 || state.files.planilha.length > 0;
     
-    const hasVirtualPdf = state.files.pdf.some(isVirtual);
-    const hasVirtualPlanilha = state.files.planilha.some(isVirtual);
-    
-    if (!hasMasterSource || hasVirtualPdf || hasVirtualPlanilha) {
-        showToast('É necessário remover os arquivos listados e reenviar os arquivos reais. O recarregamento da página (F5) perde a permissão de leitura.', 'warning');
+    const hasRealAnalitico = state.files.pdf.some(file => !isVirtual(file));
+    const hasRealPlanilha = state.files.planilha.some(file => !isVirtual(file));
+
+    // Metadados restaurados não são arquivos legíveis; uploads reais recentes continuam processáveis.
+    if (!hasRealAnalitico && !hasRealPlanilha) {
+        showToast('Envie novamente os arquivos reais da competência para processar os dados.', 'warning');
         showView('upload', document.querySelector('[data-view=upload]'));
         return;
     }
@@ -1059,8 +1062,8 @@ async function processFiles() {
         let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
         let pdfEncargos = { inssEmpresa: 0, inssSat: 0, inssTerceiros: 0, inssSatAjustado: 0, inssSegurado: 0, fgtsDep: 0, fgts13Dep: 0 };
 
-        // 1. Processar Arquivos do Relatório Analítico (PDF, TXT ou Excel)
-        for (const file of state.files.pdf) {
+        // 1. Processar somente arquivos reais do Relatório Analítico (PDF, TXT ou Excel)
+        for (const file of state.files.pdf.filter(file => !isVirtual(file))) {
             if (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.txt')) {
                 const text = file.name.toLowerCase().endsWith('.pdf') ? await extractTextFromPDF(file) : await file.text();
                 const lines = text.split('\n');
@@ -1280,8 +1283,7 @@ async function processFiles() {
         let excelBases = { inss: 0, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
-        for (const planilhaFile of state.files.planilha) {
-            if (isVirtual(planilhaFile)) continue;
+        for (const planilhaFile of state.files.planilha.filter(file => !isVirtual(file))) {
 
             // Executar extrator unificado para validação de layout
             const planSummary = await extractExcelSummary(planilhaFile);
@@ -2384,8 +2386,9 @@ function renderINSS() {
 
 function checkUploadProgress() {
     const btn = document.getElementById('processBtn');
-    const hasPDF = state.files.pdf.length > 0;
-    if (btn) btn.disabled = !hasPDF;
+    const hasReadableFile = [...state.files.pdf, ...state.files.planilha]
+        .some(file => file && file.type !== 'virtual');
+    if (btn) btn.disabled = !hasReadableFile;
 }
 
 function renderFGTS() {
