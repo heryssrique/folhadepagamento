@@ -1168,6 +1168,8 @@ async function processFiles() {
                         if (mEmpFgts) currentEmp.baseFgts += parseNum(mEmpFgts[1]);
                         const mEmpFgts13 = clean.match(/^Base\s+FGTS\s+13[^\d\s(]*\s+([\d.]+,\d{2})/i);
                         if (mEmpFgts13) currentEmp.baseFgts13 += parseNum(mEmpFgts13[1]);
+                        const mEmpSeg = clean.match(/INSS\s+Segurado\s+([\d.]+,\d{2})/i);
+                        if (mEmpSeg) currentEmp.inssSegurado += parseNum(mEmpSeg[1]);
                     }
 
                     // 1. Rubricas / Linhas Individuais do Relatório RM Labore
@@ -1410,7 +1412,8 @@ async function processFiles() {
         if (pdfLiquidoFolha === 0) pdfLiquidoFolha = pdfProventos - pdfDescontos;
 
         // 2. Processar Excel (Ferramenta de Confronto ou Fonte Master)
-        let excelBases = { inss: 0, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
+        // inss13/inssAutonomo/segurados alimentam os encargos; hasSegurados indica se a Planilha traz o INSS descontado.
+        let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
         for (const planilhaFile of state.files.planilha.filter(file => !isVirtual(file))) {
@@ -1550,7 +1553,12 @@ async function processFiles() {
                     descontos: headers.findIndex(h => /total\s+descontos|descontos/i.test(String(h || ''))),
                     liquido: headers.findIndex(h => /valor\s+liquido|liquido/i.test(String(h || ''))),
                     situacao: headers.findIndex(h => normalizeHeader(h) === 'CODSITUACAO'),
-                    codtipo: headers.findIndex(h => normalizeHeader(h) === 'CODTIPO')
+                    codtipo: headers.findIndex(h => normalizeHeader(h) === 'CODTIPO'),
+                    // Contribuição do segurado já calculada pela folha (tabela progressiva).
+                    inssValor: headers.findIndex(h => normalizeHeader(h) === 'INSS'),
+                    inss13Valor: headers.findIndex(h => normalizeHeader(h) === 'INSS13'),
+                    inssFerias: headers.findIndex(h => normalizeHeader(h) === 'INSSFERIAS'),
+                    inssDifSal: headers.findIndex(h => normalizeHeader(h) === 'INSSDIFSAL')
                 };
                 const rows = jsonData.slice(headerRowIndex + 1);
                 auditColumnMapping(audit, planilhaFile.name, headers, idx, ['inss', 'fgts', 'fgts13']);
@@ -1602,6 +1610,16 @@ async function processFiles() {
                     const inssConsiderada = idx.inss !== -1 && tipoInss !== 'D';
                     if (inssConsiderada) excelBases.inss += valInss;
                     else diretorInss += valInss;
+                    const valInss13 = idx.inss13 !== -1 ? parseV(row[idx.inss13]) : 0;
+                    const valSegurado = ['inssValor', 'inss13Valor', 'inssFerias', 'inssDifSal']
+                        .reduce((acc, key) => acc + (idx[key] !== -1 ? parseV(row[idx[key]]) : 0), 0);
+                    if (idx.inssValor !== -1) excelBases.hasSegurados = true;
+                    // Diretor (CODTIPO D) fica fora, como na base mensal; autônomo entra na CPP.
+                    if (tipoInss !== 'D') {
+                        excelBases.inss13 += valInss13;
+                        excelBases.segurados += valSegurado;
+                    }
+                    if (idx.inssAutonomo !== -1) excelBases.inssAutonomo += parseV(row[idx.inssAutonomo]);
                     if (idx.irrf !== -1)      excelBases.irrf        += parseV(row[idx.irrf]);
                     if (idx.bruto !== -1)     excelSummary.bruto     += parseV(row[idx.bruto]);
                     if (idx.descontos !== -1) excelSummary.descontos += parseV(row[idx.descontos]);
@@ -1627,7 +1645,8 @@ async function processFiles() {
                         codtipo: tipoInss,
                         baseInss: valInss,
                         inssConsiderada,
-                        baseInss13: idx.inss13 !== -1 ? parseV(row[idx.inss13]) : 0,
+                        baseInss13: valInss13,
+                        inssSegurado: valSegurado,
                         baseFgts: valFgts,
                         baseFgtsAv: valFgtsAv,
                         baseFgts13: valFgts13,
@@ -1688,10 +1707,16 @@ async function processFiles() {
         const fgtsMensalBase = pdfBases.fgts;
 
         // Calcular encargos patronais (utiliza valores diretos do relatório RM se presentes, ou calcula com alíquotas)
-        const patronal  = pdfEncargos.inssEmpresa || (inssBase * 0.20);
-        const ratfap    = pdfEncargos.inssSatAjustado || pdfEncargos.inssSat || (inssBase * ((cfg.rat || 2) / 100) * (cfg.fap || 1.00));
-        const terceiros = pdfEncargos.inssTerceiros || (inssBase * 0.058); 
-        const segurados = pdfEncargos.inssSegurado || (inssBase * 0.09);  
+        // Alíquotas patronais incidem sobre a base mensal + a base do 13º (conferido com o RM:
+        // Base INSS - Envelope + Base INSS 13º - Envelope reproduz SAT, RAT×FAP e Terceiros ao centavo).
+        const aliqPatronal = (cfg.patronal || 20) / 100;
+        const aliqRatFap = ((cfg.rat || 2) / 100) * (cfg.fap || 1.00);
+        const aliqTerceiros = (cfg.terceiros || 5.8) / 100;
+        const inssBaseEncargos = inssBase + (pdfBases.inss13 || 0);
+        const patronal  = pdfEncargos.inssEmpresa || (inssBaseEncargos * aliqPatronal);
+        const ratfap    = pdfEncargos.inssSatAjustado || pdfEncargos.inssSat || (inssBaseEncargos * aliqRatFap);
+        const terceiros = pdfEncargos.inssTerceiros || (inssBaseEncargos * aliqTerceiros);
+        const segurados = pdfEncargos.inssSegurado || (inssBaseEncargos * 0.09);
 
         // Valor do FGTS Mensal considerando o split de 8% e 2% (Aprendiz)
         const base2Mensal = Math.min(fgtsBase2, fgtsMensalBase);
@@ -1705,6 +1730,7 @@ async function processFiles() {
             {
                 origem: 'Folha Interna (Analítico)',
                 base: inssBase,
+                baseEncargos: inssBaseEncargos,
                 segurados: segurados,
                 patronal: patronal,
                 ratfap: ratfap,
@@ -1714,14 +1740,20 @@ async function processFiles() {
         ];
 
         if (state.files.planilha.length > 0) {
+            const baseEncargosExcel = excelBases.inss + excelBases.inss13;
+            const segExcel = excelBases.hasSegurados ? excelBases.segurados : baseEncargosExcel * 0.09;
+            const patExcel = (baseEncargosExcel + excelBases.inssAutonomo) * aliqPatronal;
+            const ratExcel = baseEncargosExcel * aliqRatFap;
+            const terExcel = baseEncargosExcel * aliqTerceiros;
             state.conciliacao.inss.push({
                 origem: 'Planilha Auxiliar (Confronto)',
                 base: excelBases.inss,
-                segurados: excelBases.inss * 0.09,
-                patronal: excelBases.inss * 0.20,
-                ratfap: excelBases.inss * ((cfg.rat || 2) / 100) * (cfg.fap || 1.00),
-                terceiros: excelBases.inss * 0.058,
-                total: excelBases.inss * (0.09 + 0.20 + 0.058 + ((cfg.rat || 2) / 100) * (cfg.fap || 1.00))
+                baseEncargos: baseEncargosExcel,
+                segurados: segExcel,
+                patronal: patExcel,
+                ratfap: ratExcel,
+                terceiros: terExcel,
+                total: segExcel + patExcel + ratExcel + terExcel
             });
         }
 
@@ -1776,17 +1808,17 @@ async function processFiles() {
             baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0
         });
 
-        const ratAliq = ((cfg.rat || 2) / 100) * (cfg.fap || 1.00);
-        const ratTxt = `${(ratAliq * 100).toFixed(4).replace('.', ',')}% (RAT ${cfg.rat || 2}% × FAP ${cfg.fap || 1})`;
+        const ratTxt = `${(aliqRatFap * 100).toFixed(4).replace('.', ',')}% (RAT ${cfg.rat || 2}% × FAP ${cfg.fap || 1})`;
+        const pctTxt = v => `${(v * 100).toFixed(2).replace('.', ',')}%`;
         const origemEncargo = (valorRelatorio, label, aliquotaTxt) => valorRelatorio
             ? `"${label}" lido do relatório`
-            : `Base INSS × ${aliquotaTxt} ("${label}" não encontrado no relatório)`;
+            : `(Base INSS + Base INSS 13º) × ${aliquotaTxt} ("${label}" não encontrado no relatório)`;
         audit.formulas.push(
             { fonte: 'Analítico', metrica: 'INSS · Base de Cálculo', formula: 'Maior "Base INSS - Envelope" do relatório', valor: inssBase },
             { fonte: 'Analítico', metrica: 'INSS · Segurados Retido', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
-            { fonte: 'Analítico', metrica: 'INSS · Patronal (CPP)', formula: origemEncargo(pdfEncargos.inssEmpresa, 'INSS Empresa', '20%'), valor: patronal },
+            { fonte: 'Analítico', metrica: 'INSS · Patronal (CPP)', formula: origemEncargo(pdfEncargos.inssEmpresa, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
             { fonte: 'Analítico', metrica: 'INSS · RAT + FAP', formula: origemEncargo(pdfEncargos.inssSatAjustado || pdfEncargos.inssSat, pdfEncargos.inssSatAjustado ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
-            { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', '5,8%'), valor: terceiros },
+            { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', pctTxt(aliqTerceiros)), valor: terceiros },
             { fonte: 'Analítico', metrica: 'FGTS · Base Mensal', formula: 'Maior "Base FGTS" do relatório', valor: fgtsMensalBase },
             { fonte: 'Analítico', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(base8Mensal)} × 8%) + (${formatCurrency(base2Mensal)} aprendiz × 2%)`, valor: fgtsValor },
             { fonte: 'Analítico', metrica: 'FGTS · Base 13º', formula: 'Maior "Base FGTS 13º" do relatório', valor: fgts13Base },
@@ -1794,12 +1826,16 @@ async function processFiles() {
         );
         if (state.files.planilha.length > 0) {
             const base2Excel = excelBases.fgtsZ || 0;
+            const baseEnc = excelBases.inss + excelBases.inss13;
+            const baseEncTxt = `(${formatCurrency(excelBases.inss)} + 13º ${formatCurrency(excelBases.inss13)})`;
             audit.formulas.push(
                 { fonte: 'Planilha', metrica: 'INSS · Base de Cálculo', formula: 'Σ BASEINSS dos colaboradores com CODTIPO ≠ D', valor: excelBases.inss },
-                { fonte: 'Planilha', metrica: 'INSS · Segurados Retido', formula: 'Base × 9% (alíquota única, sem tabela progressiva)', valor: excelBases.inss * 0.09 },
-                { fonte: 'Planilha', metrica: 'INSS · Patronal (CPP)', formula: 'Base × 20%', valor: excelBases.inss * 0.20 },
-                { fonte: 'Planilha', metrica: 'INSS · RAT + FAP', formula: `Base × ${ratTxt}`, valor: excelBases.inss * ratAliq },
-                { fonte: 'Planilha', metrica: 'INSS · Terceiros', formula: 'Base × 5,8%', valor: excelBases.inss * 0.058 },
+                excelBases.hasSegurados
+                    ? { fonte: 'Planilha', metrica: 'INSS · Segurados Retido', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO ≠ D', valor: excelBases.segurados }
+                    : { fonte: 'Planilha', metrica: 'INSS · Segurados Retido', formula: `${baseEncTxt} × 9% (Planilha sem coluna INSS; estimativa sem tabela progressiva)`, valor: baseEnc * 0.09 },
+                { fonte: 'Planilha', metrica: 'INSS · Patronal (CPP)', formula: `(${baseEncTxt} + autônomo ${formatCurrency(excelBases.inssAutonomo)}) × ${pctTxt(aliqPatronal)}`, valor: (baseEnc + excelBases.inssAutonomo) * aliqPatronal },
+                { fonte: 'Planilha', metrica: 'INSS · RAT + FAP', formula: `${baseEncTxt} × ${ratTxt}`, valor: baseEnc * aliqRatFap },
+                { fonte: 'Planilha', metrica: 'INSS · Terceiros', formula: `${baseEncTxt} × ${pctTxt(aliqTerceiros)}`, valor: baseEnc * aliqTerceiros },
                 { fonte: 'Planilha', metrica: 'FGTS · Base Mensal', formula: 'Σ (BASEFGTS + BASEFGTSAVPREVIO)', valor: excelBases.fgts },
                 { fonte: 'Planilha', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(excelBases.fgts - base2Excel)} × 8%) + (${formatCurrency(base2Excel)} CODTIPO Z × 2%)`, valor: (excelBases.fgts - base2Excel) * 0.08 + base2Excel * 0.02 },
                 { fonte: 'Planilha', metrica: 'FGTS · Base 13º', formula: 'Σ (BASEFGTS13 + BASEFGTS13AVPREVIO)', valor: excelBases.fgts13 },
@@ -2594,7 +2630,7 @@ function auditTraceAnalitico(audit, capture) {
 }
 
 function auditStartEmployee(audit, { chapa, nome, file, line }) {
-    const emp = { chapa, nome: nome.trim(), file, line, baseInss: 0, baseFgts: 0, baseFgts13: 0 };
+    const emp = { chapa, nome: nome.trim(), file, line, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0 };
     audit.analiticoEmployees.push(emp);
     return emp;
 }
@@ -2611,8 +2647,9 @@ function buildComparacaoColaboradores(audit) {
     const analitico = new Map();
     audit.analiticoEmployees.forEach(e => {
         const key = auditNameKey(e.nome);
-        const acc = analitico.get(key) || { nome: e.nome, chapa: e.chapa, baseInss: 0, baseFgts: 0, baseFgts13: 0, ref: [] };
+        const acc = analitico.get(key) || { nome: e.nome, chapa: e.chapa, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
         acc.baseInss += e.baseInss;
+        acc.inssSegurado += e.inssSegurado;
         acc.baseFgts += e.baseFgts;
         acc.baseFgts13 += e.baseFgts13;
         acc.ref.push(`${e.file}:${e.line}`);
@@ -2621,8 +2658,9 @@ function buildComparacaoColaboradores(audit) {
     const planilha = new Map();
     audit.planilhaRows.forEach(r => {
         const key = auditNameKey(r.nome);
-        const acc = planilha.get(key) || { nome: r.nome, codtipo: r.codtipo, situacao: r.situacao, baseInss: 0, baseFgts: 0, baseFgts13: 0, ref: [] };
+        const acc = planilha.get(key) || { nome: r.nome, codtipo: r.codtipo, situacao: r.situacao, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
         acc.baseInss += r.baseInss;
+        acc.inssSegurado += r.inssSegurado || 0;
         acc.baseFgts += r.baseFgts + r.baseFgtsAv;
         acc.baseFgts13 += r.baseFgts13 + r.baseFgts13Av;
         acc.ref.push(`${r.arquivo}:${r.linha}`);
@@ -2642,16 +2680,18 @@ function buildComparacaoColaboradores(audit) {
             inssAnalitico: a ? a.baseInss : null, inssPlanilha: p ? p.baseInss : null,
             fgtsAnalitico: a ? a.baseFgts : null, fgtsPlanilha: p ? p.baseFgts : null,
             fgts13Analitico: a ? a.baseFgts13 : null, fgts13Planilha: p ? p.baseFgts13 : null,
+            segAnalitico: a ? a.inssSegurado : null, segPlanilha: p ? p.inssSegurado : null,
             refAnalitico: a ? a.ref.join(', ') : '', refPlanilha: p ? p.ref.join(', ') : ''
         };
         const d = (x, y) => Math.round(((x || 0) - (y || 0)) * 100) / 100 + 0;
         item.difInss = d(item.inssAnalitico, item.inssPlanilha);
         item.difFgts = d(item.fgtsAnalitico, item.fgtsPlanilha);
         item.difFgts13 = d(item.fgts13Analitico, item.fgts13Planilha);
-        const semBases = side => side.baseInss === 0 && side.baseFgts === 0 && side.baseFgts13 === 0;
+        item.difSegurado = d(item.segAnalitico, item.segPlanilha);
+        const semBases = side => side.baseInss === 0 && side.baseFgts === 0 && side.baseFgts13 === 0 && side.inssSegurado === 0;
         item.status = (!a && semBases(p)) || (!p && semBases(a)) ? 'Sem bases'
             : !a ? 'Só na Planilha' : !p ? 'Só no Analítico'
-            : [item.difInss, item.difFgts, item.difFgts13].some(v => Math.abs(v) >= 0.01) ? 'Divergente' : 'Confere';
+            : [item.difInss, item.difFgts, item.difFgts13, item.difSegurado].some(v => Math.abs(v) >= 0.01) ? 'Divergente' : 'Confere';
         result.push(item);
     });
     const order = { 'Divergente': 0, 'Só no Analítico': 1, 'Só na Planilha': 2, 'Sem bases': 3, 'Confere': 4 };
@@ -2744,9 +2784,11 @@ function buildDivergencias(conciliacao, audit) {
                     const hit = rows.find(r => rowField[key](r) > 0 && near(diff, rowField[key](r)));
                     if (hit) motivos.push(`Diferença igual à base de ${hit.nome} (linha ${hit.linha} de ${hit.arquivo}).`);
                 }
-                const empField = { base: 'difInss', baseMensal: 'difFgts', base13: 'difFgts13' }[key];
+                const empField = { base: 'difInss', segurados: 'difSegurado', baseMensal: 'difFgts', base13: 'difFgts13' }[key];
                 if (empField && audit.colaboradores.length > 0) {
-                    const culpados = audit.colaboradores.filter(c => Math.abs(c[empField]) >= 0.01)
+                    // Diretores (CODTIPO D) ficam fora dos totais de INSS da Planilha; não explicam a diferença.
+                    const foraDoTotal = c => (key === 'base' || key === 'segurados') && c.codtipo === 'D';
+                    const culpados = audit.colaboradores.filter(c => Math.abs(c[empField]) >= 0.01 && !foraDoTotal(c))
                         .sort((x, y) => Math.abs(y[empField]) - Math.abs(x[empField]));
                     if (culpados.length > 0) {
                         const top = culpados.slice(0, 5).map(c => `${c.nome} (${formatCurrency(c[empField])}, ${c.status.toLowerCase()})`).join('; ');
@@ -2761,9 +2803,13 @@ function buildDivergencias(conciliacao, audit) {
                 if (/lido do relatório/.test(fa) && /×/.test(fp)) {
                     motivos.push('Analítico usa o valor apurado pelo sistema de folha; a Planilha usa alíquota fixa sobre a base. Diferença esperada mesmo com bases iguais.');
                 }
-                if (/lido do relatório/.test(fa) && ['segurados', 'patronal', 'ratfap', 'terceiros'].includes(key) && analitico.base > 0 && planilha.base > 0) {
-                    const pct = v => `${(v * 100).toFixed(2).replace('.', ',')}%`;
-                    motivos.push(`Alíquota efetiva: Analítico ${pct(a / analitico.base)} × Planilha ${pct(p / planilha.base)}. Se a do Analítico estiver correta, revise a configuração da empresa (RAT/FAP/Terceiros).`);
+                if (/lido do relatório/.test(fa) && ['patronal', 'ratfap', 'terceiros'].includes(key) && analitico.baseEncargos > 0 && planilha.baseEncargos > 0) {
+                    const pct = v => `${(v * 100).toFixed(4).replace('.', ',')}%`;
+                    const efA = a / analitico.baseEncargos;
+                    const efP = p / planilha.baseEncargos;
+                    motivos.push(Math.abs(efA - efP) < 0.00005
+                        ? `Alíquota efetiva igual (${pct(efA)} sobre base + 13º): a diferença vem da base, não da configuração.`
+                        : `Alíquota efetiva sobre base + 13º: Analítico ${pct(efA)} × Planilha ${pct(efP)}. Revise a configuração da empresa (Patronal/RAT/FAP/Terceiros).`);
                 }
                 if (motivos.length === 0) {
                     motivos.push(a > p
@@ -2860,7 +2906,7 @@ function renderConciliacaoLog() {
               <table class="data-table"><thead><tr><th>Status</th><th>Chapa</th><th>Nome</th><th>Tipo</th>
                 <th style="text-align:right">INSS Analítico</th><th style="text-align:right">INSS Planilha</th><th style="text-align:right">Dif. INSS</th>
                 <th style="text-align:right">FGTS Analítico</th><th style="text-align:right">FGTS Planilha</th><th style="text-align:right">Dif. FGTS</th>
-                <th style="text-align:right">Dif. FGTS 13º</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
+                <th style="text-align:right">Dif. FGTS 13º</th><th style="text-align:right">INSS desc. Analítico</th><th style="text-align:right">INSS desc. Planilha</th><th style="text-align:right">Dif. INSS desc.</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
         ${section('3. Origem dos valores do Analítico', usedCaptures.length, `<table class="data-table"><thead><tr><th>Campo</th><th style="text-align:right">Valor</th><th>Arquivo : linha</th><th>Trecho lido</th><th style="text-align:center">Regra</th></tr></thead><tbody>${analiticoRows}</tbody></table>`)}
         ${section('4. Leitura da Planilha de Bases (colunas)', null, `<table class="data-table"><thead><tr><th>Arquivo</th><th>Campo</th><th style="text-align:center">Coluna</th><th>Cabeçalho encontrado</th></tr></thead><tbody>${columnRows}</tbody></table>`)}
         ${section('5. Memória de cálculo', audit.formulas.length, `<table class="data-table"><thead><tr><th>Fonte</th><th>Métrica</th><th>Fórmula / origem</th><th style="text-align:right">Valor</th></tr></thead><tbody>${formulaRows}</tbody></table>`)}
@@ -2892,10 +2938,11 @@ function renderAuditComparacao() {
         <td style="text-align:right; ${mono}">${money(c.inssAnalitico)}</td><td style="text-align:right; ${mono}">${money(c.inssPlanilha)}</td>${dif(c.difInss)}
         <td style="text-align:right; ${mono}">${money(c.fgtsAnalitico)}</td><td style="text-align:right; ${mono}">${money(c.fgtsPlanilha)}</td>${dif(c.difFgts)}
         ${dif(c.difFgts13)}
+        <td style="text-align:right; ${mono}">${money(c.segAnalitico)}</td><td style="text-align:right; ${mono}">${money(c.segPlanilha)}</td>${dif(c.difSegurado)}
         <td style="font-size:0.75rem">${escapeHtml([c.refAnalitico && `Analítico ${c.refAnalitico}`, c.refPlanilha && `Planilha ${c.refPlanilha}`].filter(Boolean).join(' | '))}</td>
     </tr>`).join('') + (matches.length > LIMIT
-        ? `<tr><td colspan="12" style="color:var(--text-muted)">Mostrando ${LIMIT} de ${matches.length}. Refine o filtro ou exporte o CSV.</td></tr>`
-        : (matches.length === 0 ? '<tr><td colspan="12" style="color:var(--text-muted)">Nenhum colaborador neste filtro.</td></tr>' : ''));
+        ? `<tr><td colspan="15" style="color:var(--text-muted)">Mostrando ${LIMIT} de ${matches.length}. Refine o filtro ou exporte o CSV.</td></tr>`
+        : (matches.length === 0 ? '<tr><td colspan="15" style="color:var(--text-muted)">Nenhum colaborador neste filtro.</td></tr>' : ''));
 }
 
 function renderAuditRows(filter) {
@@ -2939,8 +2986,8 @@ function exportConciliacaoLog() {
     audit.divergencias.forEach(d => push(d.tributo, d.metrica, num(d.analitico), num(d.planilha), num(d.governo), num(d.diferenca), d.motivos.join(' ')));
     push();
     push('COLABORADOR A COLABORADOR');
-    push('Status', 'Chapa', 'Nome', 'Tipo', 'Situação', 'Base INSS Analítico', 'Base INSS Planilha', 'Dif. INSS', 'Base FGTS Analítico', 'Base FGTS Planilha (+Av. Prévio)', 'Dif. FGTS', 'Base FGTS 13º Analítico', 'Base FGTS 13º Planilha (+Av. Prévio)', 'Dif. FGTS 13º', 'Origem Analítico', 'Origem Planilha');
-    audit.colaboradores.forEach(c => push(c.status, c.chapa, c.nome, c.codtipo, c.situacao, num(c.inssAnalitico), num(c.inssPlanilha), num(c.difInss), num(c.fgtsAnalitico), num(c.fgtsPlanilha), num(c.difFgts), num(c.fgts13Analitico), num(c.fgts13Planilha), num(c.difFgts13), c.refAnalitico, c.refPlanilha));
+    push('Status', 'Chapa', 'Nome', 'Tipo', 'Situação', 'Base INSS Analítico', 'Base INSS Planilha', 'Dif. INSS', 'Base FGTS Analítico', 'Base FGTS Planilha (+Av. Prévio)', 'Dif. FGTS', 'Base FGTS 13º Analítico', 'Base FGTS 13º Planilha (+Av. Prévio)', 'Dif. FGTS 13º', 'INSS Descontado Analítico', 'INSS Descontado Planilha', 'Dif. INSS Descontado', 'Origem Analítico', 'Origem Planilha');
+    audit.colaboradores.forEach(c => push(c.status, c.chapa, c.nome, c.codtipo, c.situacao, num(c.inssAnalitico), num(c.inssPlanilha), num(c.difInss), num(c.fgtsAnalitico), num(c.fgtsPlanilha), num(c.difFgts), num(c.fgts13Analitico), num(c.fgts13Planilha), num(c.difFgts13), num(c.segAnalitico), num(c.segPlanilha), num(c.difSegurado), c.refAnalitico, c.refPlanilha));
     push();
     push('ORIGEM DOS VALORES DO ANALÍTICO'); push('Campo', 'Valor', 'Arquivo', 'Linha', 'Trecho', 'Regra', 'Usado');
     audit.analitico.forEach(c => push(c.field, num(c.value), c.file, c.line ?? '', c.text, c.rule, c.used ? 'sim' : 'não'));
@@ -2952,8 +2999,8 @@ function exportConciliacaoLog() {
     audit.formulas.forEach(f => push(f.fonte, f.metrica, f.formula, num(f.valor)));
     push();
     push('COLABORADORES DA PLANILHA');
-    push('Arquivo', 'Linha', 'Nome', 'Situação', 'Tipo', 'Base INSS', 'INSS na conciliação', 'Base INSS 13º', 'Base FGTS', 'Base FGTS Av. Prévio', 'Base FGTS 13º', 'Base FGTS 13º Av. Prévio', 'Base IRRF');
-    audit.planilhaRows.forEach(r => push(r.arquivo, r.linha, r.nome, r.situacao, r.codtipo, num(r.baseInss), r.inssConsiderada ? 'sim' : 'não', num(r.baseInss13), num(r.baseFgts), num(r.baseFgtsAv), num(r.baseFgts13), num(r.baseFgts13Av), num(r.baseIrrf)));
+    push('Arquivo', 'Linha', 'Nome', 'Situação', 'Tipo', 'Base INSS', 'INSS na conciliação', 'Base INSS 13º', 'INSS Descontado', 'Base FGTS', 'Base FGTS Av. Prévio', 'Base FGTS 13º', 'Base FGTS 13º Av. Prévio', 'Base IRRF');
+    audit.planilhaRows.forEach(r => push(r.arquivo, r.linha, r.nome, r.situacao, r.codtipo, num(r.baseInss), r.inssConsiderada ? 'sim' : 'não', num(r.baseInss13), num(r.inssSegurado), num(r.baseFgts), num(r.baseFgtsAv), num(r.baseFgts13), num(r.baseFgts13Av), num(r.baseIrrf)));
     push();
     push('EVENTOS'); push('Etapa', 'Nível', 'Evento', 'Detalhe');
     audit.entries.forEach(e => push(e.stage, e.level, e.message, e.detail));
