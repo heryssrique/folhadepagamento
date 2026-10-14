@@ -6,7 +6,7 @@
   "scripts": {
     "start": "npx serve .",
     "dev": "npx serve .",
-    "server": "nodemon server.js"
+    "server": "node server.js"
   },
   "keywords": [],
   "author": "",

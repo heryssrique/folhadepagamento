@@ -14,7 +14,7 @@ const state = {
         encargos: null
     },
     validations: [
-        { id: 'layoutAnalitico', title: 'Layout Analítico', desc: 'Verifica se o PDF/Excel Master contém as colunas de Proventos e Bases.', status: 'pending', progress: 0 },
+        { id: 'layoutAnalitico', title: 'Layout Analítico', desc: 'Verifica se o PDF/TXT/Excel Master contém as colunas de Proventos e Bases.', status: 'pending', progress: 0 },
         { id: 'layoutBases', title: 'Layout Planilha de Bases', desc: 'Valida a presença das colunas CODSITUACAO, CODTIPO e Bases FGTS/INSS.', status: 'pending', progress: 0 },
         { id: 'layoutGRRF', title: 'Layout GRRF', desc: 'Valida as colunas de FGTS Rescisório e informações de desligamento.', status: 'pending', progress: 0 },
         { id: 'integridadeCampos', title: 'Integridade de Dados', desc: 'Verifica a consistência dos formatos numéricos e identificadores.', status: 'pending', progress: 0 }
@@ -75,13 +75,12 @@ const state = {
         bases: { 
             ok: false, 
             fields: {
-                'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false,
-                'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false,
-                'FGTS': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false,
-                'BASEINSS': false, 'BASEINSS13': false, 'INSS': false, 'INSS13': false,
-                'INSSFERIAS': false, 'INSS EMPRESA': false, 'INSS RAT AJUSTADO': false, 'INSS TERCEIROS': false,
-                'TOTAL GUA': false, 'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false,
-                'IRRF13': false, 'IRRFFERIAS': false
+                'CODCOLIGADA': false, 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false,
+                'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'BASEFGTSDIFSAL': false,
+                'FGTS_MES': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'FGTSDIF': false,
+                'BASEINSS': false, 'BASEINSS13': false, 'BASE_INSS_AUTONOMO': false,
+                'INSS': false, 'INSS13': false, 'INSSFERIAS': false, 'INSSDIFSAL': false,
+                'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false, 'IRRF13': false, 'IRRFFERIAS': false
             }
         },
         grrf: {
@@ -179,7 +178,7 @@ function loadCompetenciaData(comp) {
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     state.layoutResults = {
         analitico: { ok: false, fields: { 'PRO LABORE': false, 'Proventos': false, 'Descontos': false, 'Base FGTS': false, 'Base FGTS 13º': false, 'Base INSS - Envelope': false, 'Base INSS 13º - Envelope': false, 'INSS': false, 'INSS DIRETOR/AUT': false, 'INSS 13 SALARIO': false, 'IRRF': false } },
-        bases: { ok: false, fields: { 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false, 'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'FGTS': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'BASEINSS': false, 'BASEINSS13': false, 'INSS': false, 'INSS13': false, 'INSSFERIAS': false, 'INSS EMPRESA': false, 'INSS RAT AJUSTADO': false, 'INSS TERCEIROS': false, 'TOTAL GUA': false, 'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false, 'IRRF13': false, 'IRRFFERIAS': false } },
+        bases: { ok: false, fields: { 'NOME': false, 'CCUSTO': false, 'CODSITUACAO': false, 'CODTIPO': false, 'BASEFGTS': false, 'BASEFGTSAVPREVIO': false, 'BASEFGTS13AVPREVIO': false, 'BASEFGTS13': false, 'FGTS': false, 'FGTS_AVISO': false, 'FGTS13_AVISO': false, 'FGTS13': false, 'BASEINSS': false, 'BASEINSS13': false, 'INSS': false, 'INSS13': false, 'INSSFERIAS': false, 'BASE_INSS_AUTONOMO': false, 'BASEIRRF': false, 'BASEIRRFFERIAS': false, 'IRRF': false, 'IRRF13': false, 'IRRFFERIAS': false } },
         grrf: { ok: false, fields: { 'NOME': false, 'CHAPA': false, 'CODTIPO': false, 'FGTS QUITACAO': false, 'FGTS MES ANTERIOR': false, 'FGTS AVISO PREVIO': false, 'FGTS ARTIGO 22': false, 'FGTS 13 SALARIO INDENIZADO': false, 'FGTS 13 SAL RESCISAO': false } }
     };
     return false; // Sem dados
@@ -422,8 +421,8 @@ function routeFilesAutomatically(fileList) {
         if (/fgts|gfd|guia|encargo|dctf|esocial/i.test(name) && (ext === 'xlsx' || ext === 'pdf')) {
             routed.encargos = file;
         }
-        // PDF → sempre analítico
-        else if (ext === 'pdf') {
+        // PDF ou TXT → sempre analítico
+        else if (ext === 'pdf' || ext === 'txt') {
             routed.pdf.push(file);
         }
         // XLSX/XLS → analítico (relatório)
@@ -1037,96 +1036,162 @@ async function processFiles() {
     Object.keys(state.layoutResults.grrf.fields).forEach(k => state.layoutResults.grrf.fields[k] = false);
 
     try {
-        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfDesligados = 0;
-        let pdfBases = { inss: 0, fgts: 0, fgts13: 0, irrf: 0 };
+        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0;
+        let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
+        let pdfEncargos = { inssEmpresa: 0, inssSat: 0, inssTerceiros: 0, inssSatAjustado: 0, inssSegurado: 0, fgtsDep: 0, fgts13Dep: 0 };
 
-        // 1. Processar Arquivos do Relatório Analítico (PDF ou Excel)
+        // 1. Processar Arquivos do Relatório Analítico (PDF, TXT ou Excel)
         for (const file of state.files.pdf) {
-            if (file.name.toLowerCase().endsWith('.pdf')) {
-                const text = await extractTextFromPDF(file);
+            if (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.txt')) {
+                const text = file.name.toLowerCase().endsWith('.pdf') ? await extractTextFromPDF(file) : await file.text();
                 const lines = text.split('\n');
                 
-                lines.forEach(line => {
-                    const cleanLine = line.trim();
-                    const parseCurrency = (l, regex) => {
-                        const match = l.match(regex);
-                        return match ? parseFloat(match[1].replace(/\./g, '').replace(',', '.')) : null;
-                    };
+                const parseNum = (str) => {
+                    if (!str) return 0;
+                    return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0;
+                };
 
-                    // PRO LABORE
-                    if (/Pró-Labore|Pro-Labore/i.test(cleanLine)) {
-                        const val = parseCurrency(cleanLine, /(?:Pró-Labore|Pro-Labore).*?([\d.]+,\d{2})/i);
-                        if (val !== null) { pdfLiquidoPro = Math.max(pdfLiquidoPro, val); state.layoutResults.analitico.fields['PRO LABORE'] = true; }
-                    }
-                    // Proventos
-                    if (/Proventos|Total\s+Bruto|Vencimentos/i.test(cleanLine)) {
-                        const val = parseCurrency(cleanLine, /(?:Proventos|Total\s+Bruto|Vencimentos).*?([\d.]+,\d{2})/i);
-                        if (val !== null) { pdfProventos = Math.max(pdfProventos, val); state.layoutResults.analitico.fields['Proventos'] = true; }
-                    }
-                    // Descontos
-                    if (/Descontos/i.test(cleanLine) && !/Base/i.test(cleanLine)) {
-                        const val = parseCurrency(cleanLine, /(?:Descontos).*?([\d.]+,\d{2})/i);
-                        if (val !== null) { pdfDescontos = Math.max(pdfDescontos, val); state.layoutResults.analitico.fields['Descontos'] = true; }
-                    }
-                    // Base FGTS 13º
-                    if (/Base\s+FGTS\s+13/i.test(cleanLine)) {
-                        const matches = cleanLine.match(/([\d.]+,\d{2})/g);
-                        if (matches) { 
-                            pdfBases.fgts13 = Math.max(pdfBases.fgts13, parseFloat(matches[matches.length - 1].replace(/\./g, '').replace(',', '.')));
-                            state.layoutResults.analitico.fields['Base FGTS 13º'] = true; 
-                        }
-                    } 
-                    // Base FGTS 2%
-                    else if (/Base\s+FGTS\s+Menor\s+Apr|Base\s+FGTS\s+2%/i.test(cleanLine)) {
-                        const matches = cleanLine.match(/([\d.]+,\d{2})/g);
-                        if (matches) { 
-                            pdfBases.fgts2 = Math.max(pdfBases.fgts2 || 0, parseFloat(matches[matches.length - 1].replace(/\./g, '').replace(',', '.')));
+                lines.forEach(line => {
+                    const clean = line.trim();
+
+                    // 1. Rubricas / Linhas Individuais do Relatório RM Labore
+                    // PRO LABORE (ex: 1007 PRO LABORE ... 8.475,55)
+                    if (/1007\s+PRO\s+LABORE/i.test(clean) || /^PRO[\s-]LABORE\b/i.test(clean)) {
+                        const m = clean.match(/(?:1007\s+PRO\s+LABORE|PRO[\s-]LABORE).*?([\d.]+,\d{2})/i);
+                        if (m) {
+                            pdfLiquidoPro = Math.max(pdfLiquidoPro, parseNum(m[1]));
+                            state.layoutResults.analitico.fields['PRO LABORE'] = true;
                         }
                     }
-                    // Base FGTS
-                    else if (/Base\s+FGTS/i.test(cleanLine)) {
-                        const val = parseCurrency(cleanLine, /(?:Base\s+FGTS).*?([\d.]+,\d{2})/i);
-                        if (val !== null) { pdfBases.fgts = Math.max(pdfBases.fgts, val); state.layoutResults.analitico.fields['Base FGTS'] = true; }
+
+                    // 4016 LIQUIDO FOLHA PAGAMENTO ... 589.840,80
+                    if (/4016\s+LIQUIDO\s+FOLHA\s+PAGAMENTO/i.test(clean)) {
+                        const m = clean.match(/4016\s+LIQUIDO\s+FOLHA\s+PAGAMENTO\s+\d+\s+[\d,.]+\s+([\d.]+,\d{2})/i);
+                        if (m) pdfLiquidoFolha = Math.max(pdfLiquidoFolha, parseNum(m[1]));
                     }
-                    // Base INSS 13º - Envelope
-                    if (/Base\s+INSS\s+13.*?Envelope|Base\s+INSS\s+13/i.test(cleanLine)) {
-                        const matches = cleanLine.match(/([\d.]+,\d{2})/g);
-                        if (matches) { state.layoutResults.analitico.fields['Base INSS 13º - Envelope'] = true; }
+
+                    // 4018 LIQUIDO PAGAMENTO PRO LABORE ... 6.481,86
+                    if (/4018\s+LIQUIDO\s+PAGAMENTO\s+PRO\s+LABORE/i.test(clean)) {
+                        const m = clean.match(/4018\s+LIQUIDO\s+PAGAMENTO\s+PRO\s+LABORE\s+\d+\s+[\d,.]+\s+([\d.]+,\d{2})/i);
+                        if (m && pdfLiquidoPro === 0) pdfLiquidoPro = parseNum(m[1]);
                     }
-                    // Base INSS - Envelope
-                    else if (/Base\s+INSS.*?Envelope|Base\s+INSS/i.test(cleanLine)) {
-                        const matches = cleanLine.match(/([\d.]+,\d{2})/g);
-                        if (matches) { pdfBases.inss = Math.max(pdfBases.inss, parseFloat(matches[matches.length - 1].replace(/\./g, '').replace(',', '.'))); state.layoutResults.analitico.fields['Base INSS - Envelope'] = true; }
-                    }
-                    // INSS 13 SALARIO
-                    if (/INSS\s+13\s+SAL/i.test(cleanLine)) {
-                        state.layoutResults.analitico.fields['INSS 13 SALARIO'] = true;
-                    }
-                    // INSS DIRETOR/AUT
-                    if (/INSS\s+DIRETOR|INSS\s+AUT/i.test(cleanLine)) {
-                        state.layoutResults.analitico.fields['INSS DIRETOR/AUT'] = true;
-                    }
-                    // INSS (Geral)
-                    if (/^INSS\s|[\s]INSS[\s]/i.test(cleanLine) && !/Base|13|Diretor|Aut/i.test(cleanLine)) {
+
+                    // Eventos INSS / IRRF
+                    if (/2075\s+INSS\b|^INSS\s|[\s]INSS[\s]/i.test(clean) && !/Base|13|Diretor|Aut|SAT|Empresa|Terceiro|Segurado/i.test(clean)) {
                         state.layoutResults.analitico.fields['INSS'] = true;
                     }
-                    // IRRF
-                    if (/IRRF/i.test(cleanLine)) {
-                        const matches = cleanLine.match(/([\d.]+,\d{2})/g);
-                        if (matches) { pdfBases.irrf = Math.max(pdfBases.irrf, parseFloat(matches[matches.length - 1].replace(/\./g, '').replace(',', '.'))); state.layoutResults.analitico.fields['IRRF'] = true; }
+                    if (/2080\s+INSS\s+DIRETOR\/AUT|INSS\s+DIRETOR|INSS\s+AUT/i.test(clean)) {
+                        state.layoutResults.analitico.fields['INSS DIRETOR/AUT'] = true;
+                    }
+                    if (/2083\s+INSS\s+13\s+SALARIO|INSS\s+13\s+SAL/i.test(clean)) {
+                        state.layoutResults.analitico.fields['INSS 13 SALARIO'] = true;
+                    }
+                    if (/2110\s+IRRF\b|\bIRRF\b/i.test(clean)) {
+                        state.layoutResults.analitico.fields['IRRF'] = true;
                     }
 
-                    if (/Ativos\s+(\d+)/i.test(cleanLine)) {
-                        const match = cleanLine.match(/Ativos\s+(\d+)/i);
-                        if (match) pdfAtivos = Math.max(pdfAtivos, parseInt(match[1]));
+                    // 2. Totais e Bases nos Blocos do Relatório
+                    // Proventos (ex: Proventos 992.802,19)
+                    const mProv = clean.match(/\bProventos\s+([\d.]+,\d{2})/i) || clean.match(/\bTotal\s+Bruto\s+([\d.]+,\d{2})/i);
+                    if (mProv) {
+                        pdfProventos = Math.max(pdfProventos, parseNum(mProv[1]));
+                        state.layoutResults.analitico.fields['Proventos'] = true;
                     }
-                    if (/Líquido/i.test(cleanLine)) {
-                        const match = cleanLine.match(/(?:Líquido).*?([\d.]+,\d{2})/i);
-                        if (match) pdfLiquidoFolha = Math.max(pdfLiquidoFolha, parseFloat(match[1].replace(/\./g, '').replace(',', '.')));
+
+                    // Descontos (ex: Descontos 396.479,53)
+                    const mDesc = clean.match(/\bDescontos\s+([\d.]+,\d{2})/i);
+                    if (mDesc) {
+                        pdfDescontos = Math.max(pdfDescontos, parseNum(mDesc[1]));
+                        state.layoutResults.analitico.fields['Descontos'] = true;
                     }
-                    if (/Demitidos\s+(\d+)/i.test(cleanLine)) {
-                        const match = cleanLine.match(/Demitidos\s+(\d+)/i);
-                        if (match) pdfDesligados = Math.max(pdfDesligados, parseInt(match[1]));
+
+                    // Líquido nos Totais (ex: Líquido 596.322,66)
+                    const mLik = clean.match(/\bL[íi]quido\s+([\d.]+,\d{2})/i);
+                    if (mLik && pdfLiquidoFolha === 0) {
+                        pdfLiquidoFolha = parseNum(mLik[1]);
+                    }
+
+                    // Base INSS - Envelope (ex: Base INSS - Envelope 862.025,24)
+                    const mInssEnv = clean.match(/Base\s+INSS\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+([\d.]+,\d{2})/i);
+                    if (mInssEnv) {
+                        pdfBases.inss = Math.max(pdfBases.inss, parseNum(mInssEnv[1]));
+                        state.layoutResults.analitico.fields['Base INSS - Envelope'] = true;
+                    }
+
+                    // Base INSS 13º - Envelope
+                    const mInss13Env = clean.match(/Base\s+INSS\s+13[°º]?\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+13[°º]?\s+([\d.]+,\d{2})/i);
+                    if (mInss13Env) {
+                        pdfBases.inss13 = Math.max(pdfBases.inss13 || 0, parseNum(mInss13Env[1]));
+                        state.layoutResults.analitico.fields['Base INSS 13º - Envelope'] = true;
+                    }
+
+                    // Base FGTS
+                    const mFgts = clean.match(/^Base\s+FGTS\s+([\d.]+,\d{2})/i) || clean.match(/\bBase\s+FGTS\s+([\d.]+,\d{2})/i);
+                    if (mFgts && !/13|SEFIP|Menor|Afast|Ativos|Demitidos|Resc/i.test(clean)) {
+                        pdfBases.fgts = Math.max(pdfBases.fgts, parseNum(mFgts[1]));
+                        state.layoutResults.analitico.fields['Base FGTS'] = true;
+                    }
+
+                    // Base FGTS 13º
+                    const mFgts13 = clean.match(/^Base\s+FGTS\s+13[°º]?\s+([\d.]+,\d{2})/i);
+                    if (mFgts13) {
+                        pdfBases.fgts13 = Math.max(pdfBases.fgts13, parseNum(mFgts13[1]));
+                        state.layoutResults.analitico.fields['Base FGTS 13º'] = true;
+                    }
+
+                    // Base FGTS 2% (Menor Aprendiz)
+                    const mFgts2 = clean.match(/Base\s+FGTS\s+Menor\s+Apr|Base\s+FGTS\s+2%/i);
+                    if (mFgts2) {
+                        const matches = clean.match(/([\d.]+,\d{2})/g);
+                        if (matches) pdfBases.fgts2 = Math.max(pdfBases.fgts2 || 0, parseNum(matches[matches.length - 1]));
+                    }
+
+                    // Base IRRF
+                    const mIrrf = clean.match(/\bBase\s+IRRF\s+([\d.]+,\d{2})/i);
+                    if (mIrrf && !/13|F[ée]rias|PLR/i.test(clean)) {
+                        pdfBases.irrf = Math.max(pdfBases.irrf, parseNum(mIrrf[1]));
+                        state.layoutResults.analitico.fields['IRRF'] = true;
+                    }
+
+                    // Encargos Detalhados
+                    const mInssEmp = clean.match(/INSS\s+Empresa\s+([\d.]+,\d{2})/i);
+                    if (mInssEmp) pdfEncargos.inssEmpresa = parseNum(mInssEmp[1]);
+
+                    const mInssSatAj = clean.match(/INSS\s+SAT\s+Ajustado\s+([\d.]+,\d{2})/i);
+                    if (mInssSatAj) pdfEncargos.inssSatAjustado = parseNum(mInssSatAj[1]);
+                    else {
+                        const mInssSat = clean.match(/INSS\s+SAT\s+([\d.]+,\d{2})/i);
+                        if (mInssSat) pdfEncargos.inssSat = parseNum(mInssSat[1]);
+                    }
+
+                    const mInssTerc = clean.match(/INSS\s+Terceiro\s+([\d.]+,\d{2})/i);
+                    if (mInssTerc) pdfEncargos.inssTerceiros = parseNum(mInssTerc[1]);
+
+                    const mInssSeg = clean.match(/INSS\s+Segurado\s+([\d.]+,\d{2})/i);
+                    if (mInssSeg) pdfEncargos.inssSegurado = parseNum(mInssSeg[1]);
+
+                    // 3. Quadro de Funcionários (Rodapé RM Labore)
+                    if (/Total\s+de\s+Funcion[áa]rios:/i.test(clean) || /Ativos:/i.test(clean) || /Demitidos:/i.test(clean)) {
+                        const mTot = clean.match(/Total\s+de\s+Funcion[áa]rios:\s+(\d+)/i);
+                        const mAtv = clean.match(/Ativos:\s+(\d+)/i);
+                        const mDem = clean.match(/Demitidos:\s+(\d+)/i);
+                        if (mAtv) pdfAtivos = Math.max(pdfAtivos, parseInt(mAtv[1]));
+                        else if (mTot) pdfAtivos = Math.max(pdfAtivos, parseInt(mTot[1]));
+                        if (mDem) pdfDesligados = Math.max(pdfDesligados, parseInt(mDem[1]));
+                    } else if (!/Base|FGTS/i.test(clean)) {
+                        const mAtvSimple = clean.match(/Ativos\s+(\d+)(?!\s*[,.])/i);
+                        if (mAtvSimple) pdfAtivos = Math.max(pdfAtivos, parseInt(mAtvSimple[1]));
+                        const mDemSimple = clean.match(/Demitidos\s+(\d+)(?!\s*[,.])/i);
+                        if (mDemSimple) pdfDesligados = Math.max(pdfDesligados, parseInt(mDemSimple[1]));
+                    }
+
+                    if (/Af\.\s+Previd[êe]ncia:\s+(\d+)/i.test(clean)) {
+                        const mAf = clean.match(/Af\.\s+Previd[êe]ncia:\s+(\d+)/i);
+                        if (mAf) pdfAfastados += parseInt(mAf[1]);
+                    }
+                    if (/Af\.\s+Ac\.\s+Trabalho:\s+(\d+)/i.test(clean)) {
+                        const mAc = clean.match(/Af\.\s+Ac\.\s+Trabalho:\s+(\d+)/i);
+                        if (mAc) pdfAfastados += parseInt(mAc[1]);
                     }
                 });
             } else if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
@@ -1143,7 +1208,7 @@ async function processFiles() {
                 if (isBasesFile && summary.rawHeaders && summary.rawHeaders.length > 0) {
                     const basesKeys = Object.keys(state.layoutResults.bases.fields);
                     summary.rawHeaders.forEach(rawKey => {
-                        const match = basesKeys.find(k => k.toLowerCase() === rawKey.toLowerCase());
+                        const match = basesKeys.find(k => k.toLowerCase().replace(/[\s_]+/g, '') === rawKey.toLowerCase().replace(/[\s_]+/g, ''));
                         if (match) state.layoutResults.bases.fields[match] = true;
                     });
                 }
@@ -1203,7 +1268,7 @@ async function processFiles() {
             if (isPlanBases && planSummary.rawHeaders && planSummary.rawHeaders.length > 0) {
                 const basesKeys = Object.keys(state.layoutResults.bases.fields);
                 planSummary.rawHeaders.forEach(rawKey => {
-                    const match = basesKeys.find(k => k.toLowerCase() === rawKey.toLowerCase());
+                    const match = basesKeys.find(k => k.toLowerCase().replace(/[\s_]+/g, '') === rawKey.toLowerCase().replace(/[\s_]+/g, ''));
                     if (match) state.layoutResults.bases.fields[match] = true;
                 });
             }
@@ -1275,7 +1340,7 @@ async function processFiles() {
                 // Mapear campos para validação de layout
                 const requiredBasesFields = Object.keys(state.layoutResults.bases.fields);
                 requiredBasesFields.forEach(field => {
-                    if (headers.some(h => String(h||'').toUpperCase().trim() === field)) {
+                    if (headers.some(h => String(h||'').toUpperCase().trim().replace(/[\s_]+/g, '') === field.replace(/[\s_]+/g, ''))) {
                         state.layoutResults.bases.fields[field] = true;
                     }
                 });
@@ -1364,18 +1429,10 @@ async function processFiles() {
             }
         }
 
-        // 3. Atualizar Dashboard (Prioridade PDF para Ativos, Planilha Complementar para Afastados/Desligados)
+        // 3. Atualizar Dashboard (Prioridade PDF (Analítico) > Planilha Complementar)
         state.summary.ativos = pdfAtivos || excelSummary.ativos || excelSummary.colaboradores;
-        
-        // Conforme pedido: Afastados e Desligados devem vir da planilha complementar
-        state.summary.afastados = excelSummary.afastados;
-        
-        // Prioridade: Planilha de Bases (CODSITUACAO) > GRRF > PDF
-        if (excelSummary.desligados > 0) {
-            state.summary.desligados = excelSummary.desligados;
-        } else {
-            state.summary.desligados = pdfDesligados;
-        }
+        state.summary.afastados = pdfAfastados || excelSummary.afastados || 0;
+        state.summary.desligados = pdfDesligados || excelSummary.desligados || 0;
         
         state.summary.colaboradores = state.summary.ativos; // Mantido para compatibilidade em outros cálculos
         state.summary.bruto = pdfProventos || excelSummary.bruto;
@@ -1395,14 +1452,13 @@ async function processFiles() {
         const fgts13Base = pdfBases.fgts13 || 0;
         const fgtsMensalBase = pdfBases.fgts;
 
-        // Calcular encargos patronais a partir da base
-        const patronal  = inssBase * 0.20;
-        const ratfap    = inssBase * ((cfg.rat || 2) / 100) * (cfg.fap || 1.00);
-        const terceiros = inssBase * 0.058; 
-        const segurados = inssBase * 0.09;  
+        // Calcular encargos patronais (utiliza valores diretos do relatório RM se presentes, ou calcula com alíquotas)
+        const patronal  = pdfEncargos.inssEmpresa || (inssBase * 0.20);
+        const ratfap    = pdfEncargos.inssSatAjustado || pdfEncargos.inssSat || (inssBase * ((cfg.rat || 2) / 100) * (cfg.fap || 1.00));
+        const terceiros = pdfEncargos.inssTerceiros || (inssBase * 0.058); 
+        const segurados = pdfEncargos.inssSegurado || (inssBase * 0.09);  
 
         // Valor do FGTS Mensal considerando o split de 8% e 2% (Aprendiz)
-        // Se a base 2% for maior que a base mensal, capamos ela.
         const base2Mensal = Math.min(fgtsBase2, fgtsMensalBase);
         const base8Mensal = fgtsMensalBase - base2Mensal;
         const fgtsValor = (base8Mensal * 0.08) + (base2Mensal * 0.02);
@@ -1544,7 +1600,7 @@ function simulateValidation(id) {
 
         if (!hasAnalitico) {
             v.status = 'error';
-            v.desc = '<strong>Motivo:</strong> Relatório Analítico (PDF ou Excel) não identificado.';
+            v.desc = '<strong>Motivo:</strong> Relatório Analítico (PDF, TXT ou Excel) não identificado.';
         } else if (missingEssential.length > 0) {
             v.status = 'error';
             v.desc = `<strong>Erro Crítico:</strong> Colunas essenciais ausentes no Analítico: <span class="text-danger">${missingEssential.join(', ')}</span>.`;
@@ -1566,7 +1622,7 @@ function simulateValidation(id) {
             v.desc = '<strong>Motivo:</strong> Planilha de bases não enviada. O sistema está usando apenas dados do Analítico.';
         } else if (missing.length === 0) {
             v.status = 'ok';
-            v.desc = 'Todos os 26 campos obrigatórios localizados na planilha de bases.';
+            v.desc = 'Todos os 27 campos obrigatórios localizados na planilha de bases.';
         } else {
             v.status = missing.length < 10 ? 'warning' : 'error';
             v.desc = `<strong>Motivo:</strong> Colunas ausentes na Planilha de Bases: <span class="text-danger">${missing.join(', ')}</span>.`;

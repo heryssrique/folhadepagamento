@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FolhaPay – Verificação e Validação da Folha de Pagamento</title>
   <meta name="description" content="Sistema integrado de verificação, validação e fechamento da folha de pagamento com upload de planilhas e relatórios em PDF." />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.sheetjs.com https://cdnjs.cloudflare.com; worker-src 'self' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001 https:;" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -261,7 +262,7 @@
               </div>
               <div>
                 <h3 style="margin:0;font-size:1rem;font-weight:600">Relatório Analítico <span style="background:var(--accent-blue);color:#fff;font-size:0.65rem;padding:2px 7px;border-radius:20px;margin-left:6px;vertical-align:middle">OBRIGATÓRIO</span></h3>
-                <p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-muted)">Fonte principal dos dados — PDF ou Excel exportado do RM Labore. Aceita múltiplos arquivos.</p>
+                <p style="margin:4px 0 0;font-size:0.8rem;color:var(--text-muted)">Fonte principal dos dados — PDF, TXT ou Excel exportado do RM Labore. Aceita múltiplos arquivos.</p>
               </div>
             </div>
             <div class="upload-status-icon" id="status-pdf" style="display:none">
@@ -272,10 +273,10 @@
                style="min-height:140px;margin:0 16px 16px;border-radius:10px">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('pdf')">clique para selecionar</span></p>
-            <span class="file-hint">.pdf, .xlsx, .xls — múltiplos arquivos aceitos</span>
+            <span class="file-hint">.pdf, .txt, .xlsx, .xls — múltiplos arquivos aceitos</span>
             <div class="file-preview" id="preview-pdf"></div>
           </div>
-          <input type="file" id="input-pdf" accept=".pdf,.xlsx,.xls" multiple style="display:none" onchange="handleFileSelect(event,'pdf')" />
+          <input type="file" id="input-pdf" accept=".pdf,.txt,.xlsx,.xls" multiple style="display:none" onchange="handleFileSelect(event,'pdf')" />
         </div>
 
         <!-- ARQUIVOS COMPLEMENTARES -->

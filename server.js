@@ -1,11 +1,15 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
+
+// Serve static files (HTML, CSS, JS)
+app.use(express.static(__dirname));
 
 // MongoDB Schema
 const StateSchema = new mongoose.Schema({
@@ -50,8 +54,13 @@ app.delete('/api/state', async (req, res) => {
     }
 });
 
-// Serve static files (optional, if you want Express to serve the frontend too)
-// app.use(express.static('../'));
+// Fallback para SPA (envia index.html para qualquer rota que não seja /api)
+app.use((req, res, next) => {
+    if (!req.path.startsWith('/api')) {
+        return res.sendFile(path.join(__dirname, 'index.html'));
+    }
+    next();
+});
 
 const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/folhapay';
