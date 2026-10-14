@@ -2605,21 +2605,6 @@ function renderDesligados() {
 }
 
 
-function importGovernmentData() {
-    showLoading('Conectando ao eSocial / DCTFWeb / FGTS Digital...');
-    setTimeout(() => {
-        // Simular importação de dados de desligados
-        state.conciliacao.desligados = [
-            { nome: 'Simulação: Ana Silva', data: '12/04/2026', tipo: 'Sem Justa Causa', base: 12500.00, multa: 5000.00, total: 17500.00, status: 'Recolhido' },
-            { nome: 'Simulação: Carlos Lima', data: '18/04/2026', tipo: 'Acordo Art. 484-A', base: 8200.00, multa: 1640.00, total: 9840.00, status: 'Pendente' }
-        ];
-
-        hideLoading();
-        showToast('Dados do governo sincronizados com sucesso!', 'success');
-        renderConciliacao();
-        saveState();
-    }, 2500);
-}
 
 function exportConciliacao() {
     showToast('Gerando planilha de conciliação...', 'info');
