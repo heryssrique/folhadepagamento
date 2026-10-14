@@ -1644,7 +1644,8 @@ function simulateValidation(id) {
         }
     }
     else if (id === 'layoutGRRF') {
-        const hasGRRF = state.files.planilha.some(f => f.name.toLowerCase().includes('grrf'));
+        // GRRF pode ter sido roteado para state.files.pdf (xlsx) ou state.files.planilha (csv/drop)
+        const hasGRRF = [...state.files.pdf, ...state.files.planilha].some(f => f.name.toLowerCase().includes('grrf'));
         const fields = state.layoutResults.grrf.fields;
         const missing = Object.entries(fields).filter(([name, found]) => !found).map(([name]) => name);
         
