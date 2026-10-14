@@ -1166,9 +1166,17 @@ async function processFiles() {
                     const rm = rmReadFields(clean);
                     if (currentEmp) {
                         if ('baseInss' in rm) currentEmp.baseInss += rm.baseInss;
+                        // "Base INSS 13º - GPS" e "- Envelope" truncados viram o mesmo rótulo: vale o maior do bloco.
+                        if ('baseInss13' in rm) currentEmp.baseInss13 = Math.max(currentEmp.baseInss13, rm.baseInss13);
                         if ('baseFgts' in rm) currentEmp.baseFgts += rm.baseFgts;
                         if ('baseFgts13' in rm) currentEmp.baseFgts13 += rm.baseFgts13;
                         if ('inssSegurado' in rm) currentEmp.inssSegurado += rm.inssSegurado;
+                        if ('inssEmpresa' in rm) currentEmp.inssEmpresa = rm.inssEmpresa;
+                        if ('inssSatAjustado' in rm) currentEmp.inssRat = rm.inssSatAjustado;
+                        else if ('inssSat' in rm && !currentEmp.inssRat) currentEmp.inssRat = rm.inssSat;
+                        if ('inssTerceiro' in rm) currentEmp.inssTerceiro = rm.inssTerceiro;
+                        // Sócio/diretor: rubricas de pró-labore ou INSS diretor (não confundir com o rótulo "Base INSS Pro-Labore").
+                        if (/^\d{4}\s+[^\d]*PRO[\s-]+LABORE|\b\d{4}\s+INSS\s+DIRETOR/i.test(clean)) currentEmp.isCI = true;
                     }
 
                     // 1. Rubricas / Linhas Individuais do Relatório RM Labore
@@ -1705,13 +1713,32 @@ async function processFiles() {
         const aliqPatronal = (cfg.patronal || 20) / 100;
         const aliqRatFap = ((cfg.rat || 2) / 100) * (cfg.fap || 1.00);
         const aliqTerceiros = (cfg.terceiros || 5.8) / 100;
-        const inssBaseEncargos = inssBase + (pdfBases.inss13 || 0);
+        const inssBaseTotalAnalitico = inssBase + (pdfBases.inss13 || 0);
+
+        // Contribuintes individuais no Analítico: em algumas empresas (JPL) o sócio vem como um bloco comum
+        // (1007 PRO LABORE / 2080 INSS DIRETOR) e entra nos totais do RM — inclusive com RAT e Terceiros, que
+        // não são devidos para CI. Separa esses blocos para comparar só empregados (1082/1138-01/1646/terceiros).
+        const planilhaCINames = new Set(audit.planilhaRows.filter(r => r.codtipo === 'D').map(r => auditNameKey(r.nome)));
+        const ciBlocks = audit.analiticoEmployees.filter(e => e.isCI || planilhaCINames.has(auditNameKey(e.nome)));
+        const ciA = ciBlocks.reduce((acc, e) => ({
+            base: acc.base + e.baseInss + e.baseInss13, seg: acc.seg + e.inssSegurado,
+            emp: acc.emp + e.inssEmpresa, rat: acc.rat + e.inssRat, ter: acc.ter + e.inssTerceiro
+        }), { base: 0, seg: 0, emp: 0, rat: 0, ter: 0 });
+        if (ciBlocks.length) {
+            audit.add('Analítico', ciA.rat + ciA.ter > 0.005 ? 'warning' : 'info',
+                `Contribuinte(s) individual(is) no Analítico separado(s) dos empregados: ${ciBlocks.map(e => e.nome).join(', ')}`,
+                `Base ${formatCurrency(ciA.base)}, INSS ${formatCurrency(ciA.seg)}, CPP ${formatCurrency(ciA.emp)}` +
+                (ciA.rat + ciA.ter > 0.005 ? `. O RM calculou RAT ${formatCurrency(ciA.rat)} e Terceiros ${formatCurrency(ciA.ter)} sobre o pró-labore — não devidos para contribuinte individual no eSocial.` : ''));
+        }
+
+        const inssBaseEncargos = inssBaseTotalAnalitico - ciA.base;
         // INSS Empresa do RM inclui 20% sobre autônomos; separa a parte de empregados (código 1138-01).
         const patronalCIAnalitico = (pdfBases.inssAuton || 0) * aliqPatronal;
-        const patronal  = pdfEncargos.inssEmpresa !== null ? pdfEncargos.inssEmpresa - patronalCIAnalitico : (inssBaseEncargos * aliqPatronal);
-        const ratfap    = pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat ?? (inssBaseEncargos * aliqRatFap);
-        const terceiros = pdfEncargos.inssTerceiros ?? (inssBaseEncargos * aliqTerceiros);
-        const segurados = pdfEncargos.inssSegurado ?? (inssBaseEncargos * 0.09);
+        const patronal  = pdfEncargos.inssEmpresa !== null ? pdfEncargos.inssEmpresa - patronalCIAnalitico - ciA.emp : (inssBaseEncargos * aliqPatronal);
+        const ratLido = pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat;
+        const ratfap    = ratLido !== null ? ratLido - ciA.rat : (inssBaseEncargos * aliqRatFap);
+        const terceiros = pdfEncargos.inssTerceiros !== null ? pdfEncargos.inssTerceiros - ciA.ter : (inssBaseEncargos * aliqTerceiros);
+        const segurados = pdfEncargos.inssSegurado !== null ? pdfEncargos.inssSegurado - ciA.seg : (inssBaseEncargos * 0.09);
 
         // Valor do FGTS Mensal considerando o split de 8% e 2% (Aprendiz)
         const base2Mensal = Math.min(fgtsBase2, fgtsMensalBase);
@@ -1736,13 +1763,16 @@ async function processFiles() {
                 ratfap: ratfap,
                 terceiros: terceiros,
                 subtotal: segurados + patronal + ratfap + terceiros,
-                // O Analítico do RM não traz o pró-labore do sócio: contribuintes individuais e guia ficam fora desta coluna.
-                baseCI: null, seguradosCI: null, patronalCI: null, salarioFamilia: null, total: null
+                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—". Guia sem salário-família fica "—".
+                baseCI: ciBlocks.length ? ciA.base + (pdfBases.inssAuton || 0) : null,
+                seguradosCI: ciBlocks.length ? ciA.seg : null,
+                patronalCI: ciBlocks.length ? ciA.emp + patronalCIAnalitico : null,
+                salarioFamilia: null, total: null
             }
         ];
 
         // Sem Analítico legível (ou sem nenhum valor de INSS nele), a coluna fica "—" em vez de R$ 0,00 divergente.
-        if (!hasRealAnalitico || inssBaseEncargos === 0) {
+        if (!hasRealAnalitico || inssBaseTotalAnalitico === 0) {
             Object.keys(state.conciliacao.inss[0]).forEach(k => { if (k !== 'origem') state.conciliacao.inss[0][k] = null; });
         }
 
@@ -1840,14 +1870,16 @@ async function processFiles() {
             ? `"${label}" lido do relatório${valorRelatorio === 0 ? ' (valor zerado no relatório)' : ''}`
             : `(Base INSS + Base INSS 13º) × ${aliquotaTxt} ("${label}" não encontrado no relatório)`;
         audit.formulas.push(
-            { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}`, valor: inssBaseEncargos },
+            { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}` + (ciA.base ? ` − contribuintes individuais ${formatCurrency(ciA.base)}` : ''), valor: inssBaseEncargos },
             { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
             { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
                 ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
             { fonte: 'Analítico', metrica: 'INSS · RAT Ajustado (1646)', formula: origemEncargo(pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat, pdfEncargos.inssSatAjustado !== null ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
             { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', pctTxt(aliqTerceiros)), valor: terceiros },
-            { fonte: 'Analítico', metrica: 'INSS · Contribuintes Individuais', formula: 'Não se aplica: o Analítico do RM não traz o pró-labore do sócio', valor: null },
+            ciBlocks.length
+                ? { fonte: 'Analítico', metrica: 'INSS · Base Contribuintes Individuais', formula: `Blocos de pró-labore (${ciBlocks.map(e => e.nome).join(', ')}) + "Base INSS Auton." ${formatCurrency(pdfBases.inssAuton || 0)}; encargos desses blocos descontados dos empregados`, valor: ciA.base + (pdfBases.inssAuton || 0) }
+                : { fonte: 'Analítico', metrica: 'INSS · Contribuintes Individuais', formula: 'Não se aplica: o Analítico do RM não traz o pró-labore do sócio', valor: null },
             { fonte: 'Analítico', metrica: 'FGTS · Base Mensal', formula: 'Maior "Base FGTS" do relatório', valor: fgtsMensalBase },
             { fonte: 'Analítico', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(base8Mensal)} × 8%) + (${formatCurrency(base2Mensal)} aprendiz × 2%)`, valor: fgtsValor },
             { fonte: 'Analítico', metrica: 'FGTS · Base 13º', formula: 'Maior "Base FGTS 13º" do relatório', valor: fgts13Base },
@@ -2701,7 +2733,7 @@ function extractGovernoSummary(workbook) {
         if (!isESocial && !isDctf) return;
 
         const codes = {};
-        let base = null, totalApurado = null, totalIrrf = null;
+        let base = null, totalApurado = null, totalIrrf = null, salarioFamilia = null, segDescontado = null, segCalculado = null;
         rows.forEach((row, r) => {
             row = row || [];
             // Cada célula de texto pode ser o rótulo (a DCTFWeb tem "#VALUE!" antes dos rótulos).
@@ -2718,6 +2750,12 @@ function extractGovernoSummary(workbook) {
                     codes[code] = { codigo: code, descricao: m[3].trim(), valor: (codes[code]?.valor || 0) + value, linha: r + 1 };
                 } else if (/base de c[aá]lculo da contribui[cç][aã]o previdenci[aá]ria/i.test(label)) {
                     base = value;
+                } else if (isESocial && /^valor total da contribui/i.test(label)) {
+                    // Contribuições do segurado: "Valor Descontado" (folha) e "Valor Calculado" (eSocial).
+                    segDescontado = after[0];
+                    segCalculado = after.length > 1 ? after[1] : null;
+                } else if (isESocial && /^valor total do sal[aá]rio.fam/i.test(label)) {
+                    salarioFamilia = value;
                 } else if (/^total apurado empresa/i.test(label)) {
                     totalApurado = value;
                 } else if (/^total irrf/i.test(label)) {
@@ -2727,7 +2765,7 @@ function extractGovernoSummary(workbook) {
         });
 
         if (isESocial && !result.esocial && (base !== null || Object.keys(codes).length)) {
-            result.esocial = { aba: sheetName, base, codes };
+            result.esocial = { aba: sheetName, base, codes, salarioFamilia, segDescontado, segCalculado };
         } else if (isDctf && !result.dctf && (totalApurado !== null || Object.keys(codes).length)) {
             const irrfCodes = Object.values(codes).filter(c => /^0561|^0588|^3533|^1889/.test(c.codigo) || /IRRF/i.test(c.descricao));
             result.dctf = {
@@ -2760,7 +2798,10 @@ function buildGovernoINSS(gov, aliqPatronal) {
         out.baseCI = out.patronalCI !== null && aliqPatronal > 0 ? out.patronalCI / aliqPatronal : null;
         out.base = es.base !== null ? es.base - (out.baseCI || 0) : null;
         out.subtotal = out.segurados + out.patronal + out.ratfap + out.terceiros;
-        out.total = out.subtotal + (out.seguradosCI || 0) + (out.patronalCI || 0);
+        out.salarioFamilia = es.salarioFamilia;
+        out.segDescontado = es.segDescontado;
+        out.segCalculado = es.segCalculado;
+        out.total = out.subtotal + (out.seguradosCI || 0) + (out.patronalCI || 0) - (es.salarioFamilia || 0);
     }
     if (gov.dctf && gov.dctf.totalApurado !== null) {
         // Guia INSS da DCTFWeb = total apurado − IRRF (mesma regra da planilha: X8 = X6 − X4).
@@ -2828,7 +2869,8 @@ function auditTraceAnalitico(audit, capture) {
 }
 
 function auditStartEmployee(audit, { chapa, nome, file, line }) {
-    const emp = { chapa, nome: nome.trim(), file, line, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0 };
+    const emp = { chapa, nome: nome.trim(), file, line, baseInss: 0, baseInss13: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0,
+        inssEmpresa: 0, inssRat: 0, inssTerceiro: 0, isCI: false };
     audit.analiticoEmployees.push(emp);
     return emp;
 }
@@ -2845,8 +2887,9 @@ function buildComparacaoColaboradores(audit) {
     const analitico = new Map();
     audit.analiticoEmployees.forEach(e => {
         const key = auditNameKey(e.nome);
-        const acc = analitico.get(key) || { nome: e.nome, chapa: e.chapa, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
+        const acc = analitico.get(key) || { nome: e.nome, chapa: e.chapa, baseInss: 0, baseInss13: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
         acc.baseInss += e.baseInss;
+        acc.baseInss13 += e.baseInss13;
         acc.inssSegurado += e.inssSegurado;
         acc.baseFgts += e.baseFgts;
         acc.baseFgts13 += e.baseFgts13;
@@ -2856,8 +2899,9 @@ function buildComparacaoColaboradores(audit) {
     const planilha = new Map();
     audit.planilhaRows.forEach(r => {
         const key = auditNameKey(r.nome);
-        const acc = planilha.get(key) || { nome: r.nome, codtipo: r.codtipo, situacao: r.situacao, baseInss: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
+        const acc = planilha.get(key) || { nome: r.nome, codtipo: r.codtipo, situacao: r.situacao, baseInss: 0, baseInss13: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0, ref: [] };
         acc.baseInss += r.baseInss;
+        acc.baseInss13 += r.baseInss13 || 0;
         acc.inssSegurado += r.inssSegurado || 0;
         acc.baseFgts += r.baseFgts + r.baseFgtsAv;
         acc.baseFgts13 += r.baseFgts13 + r.baseFgts13Av;
@@ -2875,7 +2919,11 @@ function buildComparacaoColaboradores(audit) {
             chapa: a ? a.chapa : '',
             codtipo: p ? p.codtipo : '',
             situacao: p ? p.situacao : '',
-            inssAnalitico: a ? a.baseInss : null, inssPlanilha: p ? p.baseInss : null,
+            // Base INSS comparada como base folha (mensal + 13º): o RM lança o "13 SALARIO AVISO PREVIO"
+            // (rubrica 1183) na base do 13º, enquanto o eSocial/Planilha o põe na base mensal.
+            inssAnalitico: a ? a.baseInss + a.baseInss13 : null, inssPlanilha: p ? p.baseInss + p.baseInss13 : null,
+            inssMensalAnalitico: a ? a.baseInss : null, inssMensalPlanilha: p ? p.baseInss : null,
+            inss13Analitico: a ? a.baseInss13 : null, inss13Planilha: p ? p.baseInss13 : null,
             fgtsAnalitico: a ? a.baseFgts : null, fgtsPlanilha: p ? p.baseFgts : null,
             fgts13Analitico: a ? a.baseFgts13 : null, fgts13Planilha: p ? p.baseFgts13 : null,
             segAnalitico: a ? a.inssSegurado : null, segPlanilha: p ? p.inssSegurado : null,
@@ -2886,18 +2934,25 @@ function buildComparacaoColaboradores(audit) {
         item.difFgts = d(item.fgtsAnalitico, item.fgtsPlanilha);
         item.difFgts13 = d(item.fgts13Analitico, item.fgts13Planilha);
         item.difSegurado = d(item.segAnalitico, item.segPlanilha);
+        item.difInssMensal = d(item.inssMensalAnalitico, item.inssMensalPlanilha);
+        item.obs = '';
         const semBases = side => side.baseInss === 0 && side.baseFgts === 0 && side.baseFgts13 === 0 && side.inssSegurado === 0;
         item.status = (!a && semBases(p)) || (!p && semBases(a)) ? 'Sem bases'
             : !a ? 'Só na Planilha' : !p ? 'Só no Analítico'
-            : [item.difInss, item.difFgts, item.difFgts13, item.difSegurado].some(v => Math.abs(v) >= 0.01) ? 'Divergente' : 'Confere';
+            : [item.difInss, item.difFgts, item.difFgts13, item.difSegurado].some(v => Math.abs(v) >= 0.01) ? 'Divergente'
+            : Math.abs(item.difInssMensal) >= 0.01 ? 'Reclassificado' : 'Confere';
+        if (a && p && Math.abs(item.difInssMensal) >= 0.01) {
+            item.obs = `Base INSS mensal ${formatCurrency(a.baseInss)} × ${formatCurrency(p.baseInss)}; 13º ${formatCurrency(a.baseInss13)} × ${formatCurrency(p.baseInss13)}`
+                + (Math.abs(item.difInss) < 0.01 ? ' — mesmo total, valor movido entre mensal e 13º (ex.: 13º sobre aviso prévio indenizado).' : '');
+        }
         result.push(item);
     });
-    const order = { 'Divergente': 0, 'Só no Analítico': 1, 'Só na Planilha': 2, 'Sem bases': 3, 'Confere': 4 };
+    const order = { 'Divergente': 0, 'Só no Analítico': 1, 'Só na Planilha': 2, 'Reclassificado': 3, 'Sem bases': 4, 'Confere': 5 };
     result.sort((x, y) => order[x.status] - order[y.status] || Math.abs(y.difInss) + Math.abs(y.difFgts) - Math.abs(x.difInss) - Math.abs(x.difFgts));
 
     const count = status => result.filter(r => r.status === status).length;
     audit.add('Conciliação', count('Divergente') + count('Só no Analítico') + count('Só na Planilha') ? 'warning' : 'info',
-        `Colaborador a colaborador: ${count('Confere')} conferem, ${count('Divergente')} divergentes, ${count('Só no Analítico')} só no Analítico, ${count('Só na Planilha')} só na Planilha, ${count('Sem bases')} sem bases`,
+        `Colaborador a colaborador: ${count('Confere')} conferem, ${count('Reclassificado')} reclassificados (mensal ↔ 13º, mesmo total), ${count('Divergente')} divergentes, ${count('Só no Analítico')} só no Analítico, ${count('Só na Planilha')} só na Planilha, ${count('Sem bases')} sem bases`,
         `${audit.analiticoEmployees.length} blocos no Analítico × ${audit.planilhaRows.length} linhas na Planilha`);
     return result;
 }
@@ -3017,10 +3072,10 @@ function buildDivergencias(conciliacao, audit) {
                 }
                 const fa = formulaOf('Analítico', `${tributo} · ${label}`);
                 const fp = formulaOf('Planilha', `${tributo} · ${label}`);
-                if (/lido do relatório/.test(fa) && /×/.test(fp)) {
+                if (a !== 0 && /lido do relatório/.test(fa) && /×/.test(fp)) {
                     motivos.push('Analítico usa o valor apurado pelo sistema de folha; a Planilha usa alíquota fixa sobre a base. Diferença esperada mesmo com bases iguais.');
                 }
-                if (/lido do relatório/.test(fa) && ['patronal', 'ratfap', 'terceiros'].includes(key) && analitico && planilha && analitico.baseEncargos > 0 && planilha.baseEncargos > 0) {
+                if (a !== 0 && /lido do relatório/.test(fa) && ['patronal', 'ratfap', 'terceiros'].includes(key) && analitico && planilha && analitico.baseEncargos > 0 && planilha.baseEncargos > 0) {
                     const pct = v => `${(v * 100).toFixed(4).replace('.', ',')}%`;
                     const efA = a / analitico.baseEncargos;
                     const efP = p / planilha.baseEncargos;
@@ -3038,7 +3093,10 @@ function buildDivergencias(conciliacao, audit) {
             if (difGov !== null) {
                 const quem = p !== null ? 'Planilha' : 'Analítico';
                 const fonteGov = /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
-                if (Math.abs(difGov) < 0.01) motivos.push(`Confere com o ${fonteGov}.`);
+                const descMenosCalc = governo.segDescontado != null && governo.segCalculado != null ? governo.segDescontado - governo.segCalculado : null;
+                if (key === 'segurados' && descMenosCalc !== null && Math.abs(descMenosCalc) >= 0.01 && near(difGov, descMenosCalc)) {
+                    motivos.push(`${quem} − eSocial = ${formatCurrency(difGov)}: igual à diferença entre o INSS descontado pela folha (${formatCurrency(governo.segDescontado)}) e o calculado pelo eSocial (${formatCurrency(governo.segCalculado)}). A folha descontou ${formatCurrency(descMenosCalc)} a ${descMenosCalc > 0 ? 'mais' : 'menos'} do que o devido; o código 1082 usa o valor calculado.`);
+                } else if (Math.abs(difGov) < 0.01) motivos.push(`Confere com o ${fonteGov}.`);
                 else if (Math.abs(difGov) <= GOV_ROUNDING_TOLERANCE) motivos.push(`${quem} − ${fonteGov} = ${formatCurrency(difGov)}: arredondamento (o governo arredonda por trabalhador/estabelecimento). Aceitável.`);
                 else motivos.push(`${quem} − ${fonteGov} = ${formatCurrency(difGov)}: diferença com o governo. Confira eventos/trabalhadores enviados ao eSocial.`);
             }
@@ -3127,17 +3185,17 @@ function renderConciliacaoLog() {
     container.innerHTML = `
         <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 12px">Gerado em ${audit.createdAt.toLocaleString('pt-BR')} · ${audit.planilhaRows.length} colaboradores lidos da Planilha · ${divergentes} métrica(s) divergente(s)</p>
         ${section('1. Divergências por métrica', divergentes, `<table class="data-table"><thead><tr><th>Métrica</th><th style="text-align:right">Analítico</th><th style="text-align:right">Planilha</th><th style="text-align:right">Governo</th><th style="text-align:right">Analítico − Planilha</th><th style="text-align:right">vs Governo</th><th>Diagnóstico</th></tr></thead><tbody>${divRows}</tbody></table>`, true)}
-        ${section('2. Colaborador a colaborador (Analítico × Planilha)', audit.colaboradores.filter(c => !['Confere', 'Sem bases'].includes(c.status)).length, audit.colaboradores.length === 0
+        ${section('2. Colaborador a colaborador (Analítico × Planilha)', audit.colaboradores.filter(c => !['Confere', 'Sem bases', 'Reclassificado'].includes(c.status)).length, audit.colaboradores.length === 0
             ? '<p style="color:var(--text-muted); padding:8px">Indisponível: requer o Analítico em TXT/PDF com blocos por funcionário e a Planilha de Bases.</p>'
             : `<div style="display:flex; gap:8px; flex-wrap:wrap; margin:8px 0">
                 <input type="search" id="auditCompFilter" class="form-input" placeholder="Filtrar por nome ou chapa..." oninput="renderAuditComparacao()" style="flex:1; min-width:200px; max-width:360px">
                 <select id="auditCompStatus" class="form-input" onchange="renderAuditComparacao()" style="max-width:220px">
                     <option value="pendentes">Somente divergências</option><option value="">Todos</option>
-                    <option>Divergente</option><option>Só no Analítico</option><option>Só na Planilha</option><option>Sem bases</option><option>Confere</option>
+                    <option>Divergente</option><option>Só no Analítico</option><option>Só na Planilha</option><option>Reclassificado</option><option>Sem bases</option><option>Confere</option>
                 </select>
               </div>
               <table class="data-table"><thead><tr><th>Status</th><th>Chapa</th><th>Nome</th><th>Tipo</th>
-                <th style="text-align:right">INSS Analítico</th><th style="text-align:right">INSS Planilha</th><th style="text-align:right">Dif. INSS</th>
+                <th style="text-align:right">Base INSS Analítico (mensal + 13º)</th><th style="text-align:right">Base INSS Planilha (mensal + 13º)</th><th style="text-align:right">Dif. INSS</th>
                 <th style="text-align:right">FGTS Analítico</th><th style="text-align:right">FGTS Planilha</th><th style="text-align:right">Dif. FGTS</th>
                 <th style="text-align:right">Dif. FGTS 13º</th><th style="text-align:right">INSS desc. Analítico</th><th style="text-align:right">INSS desc. Planilha</th><th style="text-align:right">Dif. INSS desc.</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
         ${section('3. Origem dos valores do Analítico', usedCaptures.length, `<table class="data-table"><thead><tr><th>Campo</th><th style="text-align:right">Valor</th><th>Arquivo : linha</th><th>Trecho lido</th><th style="text-align:center">Regra</th></tr></thead><tbody>${analiticoRows}</tbody></table>`)}
@@ -3160,10 +3218,10 @@ function renderAuditComparacao() {
     const mono = 'font-family:\'JetBrains Mono\',monospace';
     const money = v => v === null ? '—' : formatCurrency(v);
     const dif = v => `<td style="text-align:right; ${mono}; color:${Math.abs(v) >= 0.01 ? 'var(--accent-red)' : 'var(--text-muted)'}">${formatCurrency(v)}</td>`;
-    const statusColor = { 'Confere': 'var(--accent-green)', 'Sem bases': 'var(--text-muted)', 'Divergente': 'var(--accent-red)', 'Só no Analítico': 'var(--accent-orange)', 'Só na Planilha': 'var(--accent-orange)' };
+    const statusColor = { 'Confere': 'var(--accent-green)', 'Reclassificado': 'var(--accent-blue)', 'Sem bases': 'var(--text-muted)', 'Divergente': 'var(--accent-red)', 'Só no Analítico': 'var(--accent-orange)', 'Só na Planilha': 'var(--accent-orange)' };
     const LIMIT = 500;
     const matches = conciliacaoAudit.colaboradores.filter(c =>
-        (status === '' || (status === 'pendentes' ? !['Confere', 'Sem bases'].includes(c.status) : c.status === status)) &&
+        (status === '' || (status === 'pendentes' ? !['Confere', 'Sem bases', 'Reclassificado'].includes(c.status) : c.status === status)) &&
         (!term || `${c.nome} ${c.chapa}`.toUpperCase().includes(term)));
     body.innerHTML = matches.slice(0, LIMIT).map(c => `<tr>
         <td style="color:${statusColor[c.status]}; font-weight:600; white-space:nowrap">${escapeHtml(c.status)}</td>
@@ -3172,7 +3230,7 @@ function renderAuditComparacao() {
         <td style="text-align:right; ${mono}">${money(c.fgtsAnalitico)}</td><td style="text-align:right; ${mono}">${money(c.fgtsPlanilha)}</td>${dif(c.difFgts)}
         ${dif(c.difFgts13)}
         <td style="text-align:right; ${mono}">${money(c.segAnalitico)}</td><td style="text-align:right; ${mono}">${money(c.segPlanilha)}</td>${dif(c.difSegurado)}
-        <td style="font-size:0.75rem">${escapeHtml([c.refAnalitico && `Analítico ${c.refAnalitico}`, c.refPlanilha && `Planilha ${c.refPlanilha}`].filter(Boolean).join(' | '))}</td>
+        <td style="font-size:0.75rem">${c.obs ? `<div style="color:var(--accent-blue); margin-bottom:4px">${escapeHtml(c.obs)}</div>` : ''}${escapeHtml([c.refAnalitico && `Analítico ${c.refAnalitico}`, c.refPlanilha && `Planilha ${c.refPlanilha}`].filter(Boolean).join(' | '))}</td>
     </tr>`).join('') + (matches.length > LIMIT
         ? `<tr><td colspan="15" style="color:var(--text-muted)">Mostrando ${LIMIT} de ${matches.length}. Refine o filtro ou exporte o CSV.</td></tr>`
         : (matches.length === 0 ? '<tr><td colspan="15" style="color:var(--text-muted)">Nenhum colaborador neste filtro.</td></tr>' : ''));
@@ -3219,8 +3277,8 @@ function exportConciliacaoLog() {
     audit.divergencias.forEach(d => push(d.tributo, d.metrica, num(d.analitico), num(d.planilha), num(d.governo), num(d.diferenca), num(d.difGov), d.motivos.join(' ')));
     push();
     push('COLABORADOR A COLABORADOR');
-    push('Status', 'Chapa', 'Nome', 'Tipo', 'Situação', 'Base INSS Analítico', 'Base INSS Planilha', 'Dif. INSS', 'Base FGTS Analítico', 'Base FGTS Planilha (+Av. Prévio)', 'Dif. FGTS', 'Base FGTS 13º Analítico', 'Base FGTS 13º Planilha (+Av. Prévio)', 'Dif. FGTS 13º', 'INSS Descontado Analítico', 'INSS Descontado Planilha', 'Dif. INSS Descontado', 'Origem Analítico', 'Origem Planilha');
-    audit.colaboradores.forEach(c => push(c.status, c.chapa, c.nome, c.codtipo, c.situacao, num(c.inssAnalitico), num(c.inssPlanilha), num(c.difInss), num(c.fgtsAnalitico), num(c.fgtsPlanilha), num(c.difFgts), num(c.fgts13Analitico), num(c.fgts13Planilha), num(c.difFgts13), num(c.segAnalitico), num(c.segPlanilha), num(c.difSegurado), c.refAnalitico, c.refPlanilha));
+    push('Status', 'Chapa', 'Nome', 'Tipo', 'Situação', 'Base INSS Analítico (mensal+13º)', 'Base INSS Planilha (mensal+13º)', 'Dif. INSS', 'Base FGTS Analítico', 'Base FGTS Planilha (+Av. Prévio)', 'Dif. FGTS', 'Base FGTS 13º Analítico', 'Base FGTS 13º Planilha (+Av. Prévio)', 'Dif. FGTS 13º', 'INSS Descontado Analítico', 'INSS Descontado Planilha', 'Dif. INSS Descontado', 'Observação', 'Origem Analítico', 'Origem Planilha');
+    audit.colaboradores.forEach(c => push(c.status, c.chapa, c.nome, c.codtipo, c.situacao, num(c.inssAnalitico), num(c.inssPlanilha), num(c.difInss), num(c.fgtsAnalitico), num(c.fgtsPlanilha), num(c.difFgts), num(c.fgts13Analitico), num(c.fgts13Planilha), num(c.difFgts13), num(c.segAnalitico), num(c.segPlanilha), num(c.difSegurado), c.obs, c.refAnalitico, c.refPlanilha));
     push();
     push('ORIGEM DOS VALORES DO ANALÍTICO'); push('Campo', 'Valor', 'Arquivo', 'Linha', 'Trecho', 'Regra', 'Usado');
     audit.analitico.forEach(c => push(c.field, num(c.value), c.file, c.line ?? '', c.text, c.rule, c.used ? 'sim' : 'não'));
