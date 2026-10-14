@@ -884,9 +884,9 @@ async function extractExcelSummary(file) {
                     }
                 }
                 // Bases FGTS
-                if (/^Base\s+FGTS\s+13[°º]?\s*(Demitidos|Ativos|Rescisao|SEFIP|Verde|Menor|Afast|Ant)/i.test(cell)) {
+                if (/^Base\s+FGTS\s+13[^\d\s]*(Demitidos|Ativos|Rescisao|SEFIP|Verde|Menor|Afast|Ant)/i.test(cell)) {
                     // Subtipos - ignorar para não duplicar
-                } else if (/^Base\s+FGTS\s+13[°º]?/i.test(cell)) {
+                } else if (/^Base\s+FGTS\s+13[^\d\s]*/i.test(cell)) {
                     const val = pickMonetary(row, c);
                     if (val > 0) sheetSummary.bases.fgts13 += val;
                 } else if (/Base\s+FGTS\s+Menor\s+Apr|Base\s+FGTS\s+2%/i.test(cell)) {
@@ -898,7 +898,7 @@ async function extractExcelSummary(file) {
                     if (val > 0) sheetSummary.bases.fgts += val;
                 }
                 // Bases INSS
-                if (/Base\s+INSS\s+13[°º]?.*?Envelope|Base\s+INSS\s+13[°º]?/i.test(cell)) {
+                if (/Base\s+INSS\s+13[^\d\s]*.*?Envelope|Base\s+INSS\s+13[^\d\s]*/i.test(cell)) {
                     const val = pickMonetary(row, c);
                     if (val > 0) sheetSummary.bases.inss13 = (sheetSummary.bases.inss13||0) + val;
                 } else if (/^Base\s+INSS\s*[-–]?\s*Envelope$|^Base\s+INSS$/i.test(cell)) {
@@ -1130,7 +1130,7 @@ async function processFiles() {
                     }
 
                     // Base INSS 13º - Envelope
-                    const mInss13Env = clean.match(/Base\s+INSS\s+13[°º]?\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+13[°º]?\s+([\d.]+,\d{2})/i);
+                    const mInss13Env = clean.match(/Base\s+INSS\s+13[^\d\s]*\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+13[^\d\s]*\s+([\d.]+,\d{2})/i);
                     if (mInss13Env) {
                         pdfBases.inss13 = Math.max(pdfBases.inss13 || 0, parseNum(mInss13Env[1]));
                         state.layoutResults.analitico.fields['Base INSS 13º - Envelope'] = true;
@@ -1143,9 +1143,13 @@ async function processFiles() {
                         state.layoutResults.analitico.fields['Base FGTS'] = true;
                     }
 
-                    // Base FGTS 13º
-                    const mFgts13 = clean.match(/^Base\s+FGTS\s+13[°º]?\s+([\d.]+,\d{2})/i);
-                    if (mFgts13) {
+                    // Base FGTS 13º — o arquivo TXT é latin-1 lido como UTF-8, então o "º"
+                    // vira � (replacement char). Usamos [^\d\s]* para consumir qualquer
+                    // sufixo não-numérico após "13" (inclusive nenhum) antes do valor.
+                    // Também exclui variantes com sufixo de texto (SEFIP, Resc., Demit, Ativos)
+                    // para não conflitar com a regex do fgts de Base FGTS.
+                    const mFgts13 = clean.match(/^Base\s+FGTS\s+13[^\d\s]*\s+([\d.]+,\d{2})/i);
+                    if (mFgts13 && !/SEFIP|Resc|Demit|Ativos|Afast|Menor|Ind|Verde|Ant/i.test(clean)) {
                         pdfBases.fgts13 = Math.max(pdfBases.fgts13, parseNum(mFgts13[1]));
                         state.layoutResults.analitico.fields['Base FGTS 13º'] = true;
                     }
