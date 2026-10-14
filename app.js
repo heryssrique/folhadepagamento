@@ -997,15 +997,17 @@ async function extractExcelSummary(file) {
                 bruto: findCols(/total\s+proventos|bruto|vencimentos/i),
                 descontos: findCols(/total\s+descontos|descontos/i),
                 liquido: findCols(/valor\s+liquido|liquido/i),
-                inss: findCols(/^BASEINSS$|base\s+inss|base\s+prev/i),
+                // INSS - expanded patterns to handle "Base de INSS", "Base FGTS", etc.
+                inss: findCols(/^BASEINSS$|base\s+inss|base\s+prev|base\s+de\s+inss|inss\s+base/i),
                 inss13: findCols(/^BASEINSS13$|base\s+inss\s+13/i),
-                inssValor: findCols(/^INSS$|valor\s+inss/i),
+                inssValor: findCols(/^INSS$|valor\s+inss|inss\s+valor/i),
                 inss13Valor: findCols(/^INSS13$|inss\s+13/i),
-                inssDiretor: findCols(/inss\s+diretor|inss\s+aut/i),
-                fgts: findCols(/base\s+fgts$|base\s+fgts\s+mensal|^fgts$/i),
-                fgts13: findCols(/fgts\s+13/i),
-                fgts2: findCols(/fgts\s+2%|fgts\s+menor/i),
-                irrf: findCols(/base\s+irrf|base\s+ir/i),
+                inssDiretor: findCols(/inss\s+diretor|inss\s+aut|aut\s+inss/i),
+                // FGTS - expanded patterns to handle "Base de FGTS", "FGTS Mensal", "FGTS 13º", etc.
+                fgts: findCols(/base\s+fgts$|base\s+fgts\s+mensal|^fgts$|base\s+de\s+fgts|fgts\s+mensal|base\s+FGTS/i),
+                fgts13: findCols(/fgts\s+13|FGTS\s+13|base\s+fgts\s+13|base\s+FGTS\s+13/i),
+                fgts2: findCols(/fgts\s+2%|fgts\s+menor|2%\s+FGTS/i),
+                irrf: findCols(/base\s+irrf|base\s+ir|ir\s+base/i),
                 proLabore: findCols(/pro\s*labore/i),
                 situacao: headers.findIndex(h => /^CODSITUACAO$/i.test(h) || /SITUA[ÇC][ÃA]O/i.test(h))
             };
