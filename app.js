@@ -926,7 +926,14 @@ async function extractExcelSummary(file) {
 
         // 2. Se não encontrou rótulos (ou se for Planilha de Bases, que é sempre tabular), assume tabular
         if (isBases || (!foundLabels.bruto && !foundLabels.liquido)) {
-            const headers = rows[0] || [];
+            // Detecta a linha de cabeçalho dinamicamente: primeira linha que contém
+            // "NOME" (ou "BASEFGTS") em qualquer célula — necessário porque a Planilha de
+            // Bases tem um bloco de totais nas primeiras linhas antes da tabela de dados.
+            const headerRowIdx = rows.findIndex(r =>
+                (r||[]).some(c => /^NOME$|^BASEFGTS$|^BASEINSS$/i.test(String(c||'').trim()))
+            );
+            const hIdx = headerRowIdx >= 0 ? headerRowIdx : 0;
+            const headers = rows[hIdx] || [];
             // Coletar cabeçalhos crus para validação de layout (Planilha de Bases)
             headers.forEach(h => { const k = String(h||'').trim(); if (k) summary.rawHeaders.add(k); });
             const findCols = (regex) => headers.reduce((acc, h, i) => regex.test(h) ? [...acc, i] : acc, []);
@@ -946,7 +953,7 @@ async function extractExcelSummary(file) {
                 proLabore: findCols(/pro\s*labore/i),
                 situacao: headers.findIndex(h => /^CODSITUACAO$/i.test(h) || /SITUA[ÇC][ÃA]O/i.test(h))
             };
-            const dataRows = rows.slice(1);
+            const dataRows = rows.slice(hIdx + 1);
             dataRows.forEach(row => {
                 idx.bruto.forEach(i => { sheetSummary.bruto += parseVal(row[i]); });
                 idx.descontos.forEach(i => { sheetSummary.descontos += parseVal(row[i]); });
