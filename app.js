@@ -1272,8 +1272,10 @@ async function processFiles() {
                     }
 
                     // Base IRRF
+                    // O valor precisa vir logo após "Base IRRF", o que já exclui "Base IRRF 13º/Férias/PLR".
+                    // Não filtrar a linha inteira: no RM o total geral divide a linha com "FGTS 13o. Sal.".
                     const mIrrf = clean.match(/\bBase\s+IRRF\s+([\d.]+,\d{2})/i);
-                    if (mIrrf && !/13|F[ée]rias|PLR/i.test(clean)) {
+                    if (mIrrf) {
                         trace('Base IRRF', parseNum(mIrrf[1]), lineIdx, clean, 'max');
                         pdfBases.irrf = Math.max(pdfBases.irrf, parseNum(mIrrf[1]));
                         state.layoutResults.analitico.fields['IRRF'] = true;
@@ -1835,8 +1837,9 @@ async function processFiles() {
         hideLoading();
         showToast('Análise do Relatório Analítico concluída!', 'success');
         
-        if (state.files.planilha.length > 0 && Math.abs(pdfProventos - excelBases.inss) > 10) {
-            showToast('Alerta: Bases de INSS no Excel divergem do PDF!', 'warning');
+        // Compara base com base (antes comparava Proventos × Base INSS e alertava sempre).
+        if (pdfBases.inss > 0 && excelBases.inss > 0 && Math.abs(pdfBases.inss - excelBases.inss) >= 0.01) {
+            showToast(`Alerta: Base INSS do Analítico (${formatCurrency(pdfBases.inss)}) diverge da Planilha de Bases (${formatCurrency(excelBases.inss)}). Veja o Log de Conciliação.`, 'warning');
         }
 
         showView('validacao', document.querySelector('[data-view=validacao]'));
