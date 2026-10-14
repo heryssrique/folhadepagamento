@@ -738,16 +738,19 @@ async function extractGRRFSummary(file) {
             if (!row) continue;
             
             let matches = 0;
+            let valueMatches = 0;
             row.forEach(h => {
                 const hs = String(h||'').toUpperCase().trim();
-                if (/FGTS\s+QUITACAO|Valor\s+fgts\s+folha/i.test(hs)) matches++;
-                if (/FGTS\s+MES\s+ANTERIOR/i.test(hs)) matches++;
+                if (/FGTS\s+QUITACAO|Valor\s+fgts\s+folha/i.test(hs)) { matches++; valueMatches++; }
+                if (/FGTS\s+MES\s+ANTERIOR/i.test(hs)) { matches++; valueMatches++; }
                 if (/^NOME[1]*$/i.test(hs)) matches++;
                 if (/^CHAPA$/i.test(hs)) matches++;
                 if (/^CODTIPO$/i.test(hs)) matches++;
             });
 
-            if (matches >= 2) { // Reduzindo para 2 matches para ser mais flexível
+            // Exige ao menos uma coluna de valor rescisório: NOME + CODTIPO sozinhos
+            // também existem na Planilha de Bases e a classificariam como GRRF.
+            if (matches >= 2 && valueMatches >= 1) {
                 if (matches > bestHeaderMatchCount) {
                     bestHeaderMatchCount = matches;
                     headerRowIdx = r;
@@ -1374,8 +1377,30 @@ async function processFiles() {
 
             const excelBuffer = await planilhaFile.arrayBuffer();
             const workbook = XLSX.read(excelBuffer);
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+            // Localizar a tabela de bases (cabeçalho com NOME/CODSITUACAO/CODTIPO/BASEINSS/BASEFGTS)
+            // em qualquer aba e em qualquer linha (pode vir após um bloco de totais).
+            const normalizeHeader = value => String(value || '').trim().toUpperCase().replace(/[\s_]+/g, '');
+            const expectedHeaders = ['NOME', 'CODSITUACAO', 'CODTIPO', 'BASEINSS', 'BASEFGTS'];
+            let jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+            let headerRowIndex = -1;
+            let bestHeaderScore = 0;
+            let headers = [];
+            for (const sheetName of workbook.SheetNames) {
+                const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+                for (let i = 0; i < sheetRows.length; i++) {
+                    const row = sheetRows[i] || [];
+                    const normalized = row.map(normalizeHeader);
+                    const score = expectedHeaders.filter(field => normalized.includes(field)).length;
+                    if (score > bestHeaderScore) {
+                        bestHeaderScore = score;
+                        headerRowIndex = i;
+                        headers = row;
+                        jsonData = sheetRows;
+                    }
+                }
+            }
+            const hasBasesTable = bestHeaderScore >= 3;
 
             // Detectar se é relatório GRRF (Valores de FGTS Rescisório)
             const grrf = await extractGRRFSummary(planilhaFile);
@@ -1420,26 +1445,13 @@ async function processFiles() {
                 }
 
                 showToast(`✅ GRRF: ${grrf.qtdDesligados} desligados — Total FGTS Rescisório: ${formatCurrency(grrf.totalFGTS)}`, 'success');
-            } else {
-                // Planilha tabular normal de confronto de bases
-                // Localizar a linha de cabeçalho da tabela de bases, mesmo após o bloco de totais.
-                const normalizeHeader = value => String(value || '').trim().toUpperCase().replace(/[\s_]+/g, '');
-                const expectedHeaders = ['NOME', 'CODSITUACAO', 'CODTIPO', 'BASEINSS', 'BASEFGTS'];
-                let headerRowIndex = -1;
-                let bestHeaderScore = 0;
-                let headers = [];
-                for (let i = 0; i < jsonData.length; i++) {
-                    const row = jsonData[i] || [];
-                    const normalized = row.map(normalizeHeader);
-                    const score = expectedHeaders.filter(field => normalized.includes(field)).length;
-                    if (score > bestHeaderScore) {
-                        bestHeaderScore = score;
-                        headerRowIndex = i;
-                        headers = row;
-                    }
-                }
+            }
 
-                if (headerRowIndex < 0 || bestHeaderScore < 3) {
+            // Bases e GRRF não são exclusivos: o mesmo workbook pode ter a aba BASES e a aba GRRF.
+            if (hasBasesTable || !grrf.isGRRF) {
+                // Planilha tabular normal de confronto de bases
+                if (!hasBasesTable) {
+                    jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
                     headerRowIndex = 0;
                     headers = jsonData[0] || [];
                 }
