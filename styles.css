@@ -1293,3 +1293,13 @@ input[type="month"]:focus, input[type="date"]:focus {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* Log de Conciliação */
+.audit-section { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; background: var(--bg-elevated); }
+.audit-section > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; color: var(--text-primary); list-style-position: inside; }
+.audit-section[open] > summary { border-bottom: 1px solid var(--border); }
+.audit-section .table-responsive { padding: 8px 12px 12px; max-height: 480px; overflow: auto; }
+.audit-section .data-table td { vertical-align: top; }
+.audit-section .data-table th,
+.audit-section .data-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.audit-section .data-table th { text-align: left; position: sticky; top: 0; background: var(--bg-elevated); }
