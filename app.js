@@ -81,6 +81,7 @@ const state = {
     conciliacao: {
         inss: [],
         fgts: [],
+        irrf: [],
         desligados: []
     },
     layoutResults: {
@@ -204,7 +205,7 @@ function loadCompetenciaData(comp) {
     };
     state.validations.forEach(v => { v.status = 'pending'; v.progress = 0; });
     state.fechamentoSteps.forEach((s, i) => { s.status = i === 0 ? 'active' : 'locked'; });
-    state.conciliacao = { inss: [], fgts: [], desligados: [] };
+    state.conciliacao = { inss: [], fgts: [], irrf: [], desligados: [] };
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     state.layoutResults = {
         analitico: { ok: false, fields: { 'PRO LABORE': false, 'Proventos': false, 'Descontos': false, 'Base FGTS': false, 'Base FGTS 13º': false, 'Base INSS - Envelope': false, 'Base INSS 13º - Envelope': false, 'INSS': false, 'INSS DIRETOR/AUT': false, 'INSS 13 SALARIO': false, 'IRRF': false } },
@@ -1283,6 +1284,13 @@ async function processFiles() {
                         state.layoutResults.analitico.fields['IRRF'] = true;
                     }
 
+                    // Base de autônomos no total do RM ("Base INSS Auton."): a CPP do relatório inclui 20% sobre ela.
+                    const mAuton = clean.match(/Base\s+INSS\s+Aut[oô]n\w*\.?\s+([\d.]+,\d{2})/i);
+                    if (mAuton) {
+                        trace('Base INSS Autônomos', parseNum(mAuton[1]), lineIdx, clean, 'max');
+                        pdfBases.inssAuton = Math.max(pdfBases.inssAuton || 0, parseNum(mAuton[1]));
+                    }
+
                     // Encargos Detalhados
                     const mInssEmp = clean.match(/INSS\s+Empresa\s+([\d.]+,\d{2})/i);
                     if (mInssEmp) {
@@ -1413,7 +1421,10 @@ async function processFiles() {
 
         // 2. Processar Excel (Ferramenta de Confronto ou Fonte Master)
         // inss13/inssAutonomo/segurados alimentam os encargos; hasSegurados indica se a Planilha traz o INSS descontado.
-        let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
+        // prolabore/seguradosCI = contribuintes individuais (CODTIPO D); irrf* = IRRF retido; difSal = BASEFGTSDIFSAL.
+        let govData = null;
+        let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false,
+            prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
         for (const planilhaFile of state.files.planilha.filter(file => !isVirtual(file))) {
@@ -1459,6 +1470,15 @@ async function processFiles() {
                 }
             }
             const hasBasesTable = bestHeaderScore >= 3;
+
+            const gov = extractGovernoSummary(workbook);
+            if (gov && !govData) {
+                govData = gov;
+                audit.add('Governo', 'info', `Valores do governo lidos de ${planilhaFile.name}`,
+                    [gov.esocial && `eSocial (aba "${gov.esocial.aba}"): base ${formatCurrency(gov.esocial.base || 0)}, ${Object.keys(gov.esocial.codes).length} códigos de receita`,
+                     gov.dctf && `DCTFWeb (aba "${gov.dctf.aba}"): total apurado ${formatCurrency(gov.dctf.totalApurado || 0)}, IRRF ${formatCurrency(gov.dctf.irrf || 0)}`]
+                        .filter(Boolean).join(' | '));
+            }
             audit.add('Planilha', hasBasesTable ? 'info' : 'warning', `Lendo ${planilhaFile.name}`,
                 hasBasesTable
                     ? `Tabela de bases na aba "${basesSheetName}", cabeçalho na linha ${headerRowIndex + 1} (${bestHeaderScore}/${expectedHeaders.length} colunas-chave)`
@@ -1558,7 +1578,12 @@ async function processFiles() {
                     inssValor: headers.findIndex(h => normalizeHeader(h) === 'INSS'),
                     inss13Valor: headers.findIndex(h => normalizeHeader(h) === 'INSS13'),
                     inssFerias: headers.findIndex(h => normalizeHeader(h) === 'INSSFERIAS'),
-                    inssDifSal: headers.findIndex(h => normalizeHeader(h) === 'INSSDIFSAL')
+                    inssDifSal: headers.findIndex(h => normalizeHeader(h) === 'INSSDIFSAL'),
+                    baseDifSal: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTSDIFSAL'),
+                    salarioFamilia: headers.findIndex(h => /^(VALOR)?SAL(ARIO)?FAM(ILIA)?$/.test(normalizeHeader(h))),
+                    irrfValor: headers.findIndex(h => normalizeHeader(h) === 'IRRF'),
+                    irrf13Valor: headers.findIndex(h => normalizeHeader(h) === 'IRRF13'),
+                    irrfFeriasValor: headers.findIndex(h => normalizeHeader(h) === 'IRRFFERIAS')
                 };
                 const rows = jsonData.slice(headerRowIndex + 1);
                 auditColumnMapping(audit, planilhaFile.name, headers, idx, ['inss', 'fgts', 'fgts13']);
@@ -1614,11 +1639,24 @@ async function processFiles() {
                     const valSegurado = ['inssValor', 'inss13Valor', 'inssFerias', 'inssDifSal']
                         .reduce((acc, key) => acc + (idx[key] !== -1 ? parseV(row[idx[key]]) : 0), 0);
                     if (idx.inssValor !== -1) excelBases.hasSegurados = true;
-                    // Diretor (CODTIPO D) fica fora, como na base mensal; autônomo entra na CPP.
+                    // Diretor/sócio (CODTIPO D) é contribuinte individual: pró-labore e INSS (1099) separados dos empregados.
                     if (tipoInss !== 'D') {
                         excelBases.inss13 += valInss13;
                         excelBases.segurados += valSegurado;
+                    } else {
+                        // Pró-labore: a planilha usa a BASEIRRF do sócio; há empresas com BASEINSS zerada na linha
+                        // do sócio (JPL) e outras com as duas iguais (CONCRETA). O maior valor cobre os dois casos.
+                        const valIrrfBase = idx.irrf !== -1 ? parseV(row[idx.irrf]) : 0;
+                        excelBases.prolabore += Math.max(valInss, valIrrfBase);
+                        excelBases.seguradosCI += valSegurado;
                     }
+                    const val = key => (idx[key] !== -1 ? parseV(row[idx[key]]) : 0);
+                    excelBases.difSal += val('baseDifSal');
+                    excelBases.salarioFamilia += val('salarioFamilia');
+                    excelBases.irrfMensal += val('irrfValor');
+                    excelBases.irrf13 += val('irrf13Valor');
+                    excelBases.irrfFerias += val('irrfFeriasValor');
+                    if (idx.irrfValor !== -1) excelBases.hasIrrf = true;
                     if (idx.inssAutonomo !== -1) excelBases.inssAutonomo += parseV(row[idx.inssAutonomo]);
                     if (idx.irrf !== -1)      excelBases.irrf        += parseV(row[idx.irrf]);
                     if (idx.bruto !== -1)     excelSummary.bruto     += parseV(row[idx.bruto]);
@@ -1663,6 +1701,27 @@ async function processFiles() {
                     }
                 });
                 
+                // Salário-família: sem coluna por colaborador, vem do bloco de resumo acima da tabela
+                // ("VALOR SALARIO FAMILIA" com o valor logo abaixo — 1 a 3 linhas — ou à direita).
+                if (idx.salarioFamilia === -1) {
+                    const toNum = v => (typeof v === 'number' ? v : (typeof v === 'string' && /^\s*-?[\d.]+(,\d+)?\s*$/.test(v) ? parseFloat(v.replace(/\./g, '').replace(',', '.')) : null));
+                    outer:
+                    for (let r = 0; r < headerRowIndex; r++) {
+                        const row = jsonData[r] || [];
+                        for (let c = 0; c < row.length; c++) {
+                            if (!/sal[aá]rio\s*fam[ií]lia/i.test(String(row[c] ?? ''))) continue;
+                            let found = null;
+                            for (let d = 1; d <= 3 && found === null; d++) found = toNum((jsonData[r + d] || [])[c]);
+                            if (found === null) found = row.slice(c + 1).map(toNum).find(v => v !== null) ?? null;
+                            if (found !== null) {
+                                excelBases.salarioFamilia += found;
+                                audit.add('Planilha', 'info', `Salário-família lido do bloco de resumo de ${planilhaFile.name}`, `${formatCurrency(found)} (célula ${XLSX.utils.encode_col(c)}${r + 1} e abaixo)`);
+                                break outer;
+                            }
+                        }
+                    }
+                }
+
                 // Cálculo das Bases Tipo N (Regular)
                 excelBases.fgtsN = excelBases.fgts - excelBases.fgtsZ;
                 excelBases.fgtsN13 = excelBases.fgts13 - excelBases.fgtsZ13;
@@ -1713,7 +1772,9 @@ async function processFiles() {
         const aliqRatFap = ((cfg.rat || 2) / 100) * (cfg.fap || 1.00);
         const aliqTerceiros = (cfg.terceiros || 5.8) / 100;
         const inssBaseEncargos = inssBase + (pdfBases.inss13 || 0);
-        const patronal  = pdfEncargos.inssEmpresa || (inssBaseEncargos * aliqPatronal);
+        // INSS Empresa do RM inclui 20% sobre autônomos; separa a parte de empregados (código 1138-01).
+        const patronalCIAnalitico = (pdfBases.inssAuton || 0) * aliqPatronal;
+        const patronal  = pdfEncargos.inssEmpresa ? pdfEncargos.inssEmpresa - patronalCIAnalitico : (inssBaseEncargos * aliqPatronal);
         const ratfap    = pdfEncargos.inssSatAjustado || pdfEncargos.inssSat || (inssBaseEncargos * aliqRatFap);
         const terceiros = pdfEncargos.inssTerceiros || (inssBaseEncargos * aliqTerceiros);
         const segurados = pdfEncargos.inssSegurado || (inssBaseEncargos * 0.09);
@@ -1726,41 +1787,72 @@ async function processFiles() {
         // Valor do FGTS 13º (Geralmente 8%)
         const fgts13Valor = fgts13Base * 0.08;
 
+        // Estrutura da apuração (mesma da planilha de bases / prompt de apuração):
+        //   empregados: base folha (mensal + 13º + dif. salarial), segurados 1082, patronal 1138-01, RAT 1646, terceiros;
+        //   contribuintes individuais (pró-labore + autônomos): segurados 1099 e patronal 1138-04;
+        //   guia INSS = subtotal empregados + CI − salário-família.
+        // null = não se aplica à fonte (exibido como "—" e fora do cálculo de divergência).
         state.conciliacao.inss = [
             {
                 origem: 'Folha Interna (Analítico)',
-                base: inssBase,
+                base: inssBaseEncargos,
                 baseEncargos: inssBaseEncargos,
                 segurados: segurados,
                 patronal: patronal,
                 ratfap: ratfap,
                 terceiros: terceiros,
-                total: segurados + patronal + ratfap + terceiros
+                subtotal: segurados + patronal + ratfap + terceiros,
+                // O Analítico do RM não traz o pró-labore do sócio: contribuintes individuais e guia ficam fora desta coluna.
+                baseCI: null, seguradosCI: null, patronalCI: null, salarioFamilia: null, total: null
             }
         ];
 
+        // Sem Analítico legível (ou sem nenhum valor de INSS nele), a coluna fica "—" em vez de R$ 0,00 divergente.
+        if (!hasRealAnalitico || inssBaseEncargos === 0) {
+            Object.keys(state.conciliacao.inss[0]).forEach(k => { if (k !== 'origem') state.conciliacao.inss[0][k] = null; });
+        }
+
         if (state.files.planilha.length > 0) {
-            const baseEncargosExcel = excelBases.inss + excelBases.inss13;
+            const baseEncargosExcel = excelBases.inss + excelBases.inss13 + excelBases.difSal;
             const segExcel = excelBases.hasSegurados ? excelBases.segurados : baseEncargosExcel * 0.09;
-            const patExcel = (baseEncargosExcel + excelBases.inssAutonomo) * aliqPatronal;
+            const patExcel = baseEncargosExcel * aliqPatronal;
             const ratExcel = baseEncargosExcel * aliqRatFap;
             const terExcel = baseEncargosExcel * aliqTerceiros;
+            const baseCIExcel = excelBases.prolabore + excelBases.inssAutonomo;
+            const subtotalExcel = segExcel + patExcel + ratExcel + terExcel;
             state.conciliacao.inss.push({
                 origem: 'Planilha Auxiliar (Confronto)',
-                base: excelBases.inss,
+                base: baseEncargosExcel,
                 baseEncargos: baseEncargosExcel,
                 segurados: segExcel,
                 patronal: patExcel,
                 ratfap: ratExcel,
                 terceiros: terExcel,
-                total: segExcel + patExcel + ratExcel + terExcel
+                subtotal: subtotalExcel,
+                baseCI: baseCIExcel,
+                seguradosCI: excelBases.seguradosCI,
+                patronalCI: baseCIExcel * aliqPatronal,
+                salarioFamilia: excelBases.salarioFamilia,
+                total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - excelBases.salarioFamilia
             });
         }
 
-        state.conciliacao.inss.push({
-            origem: 'Governo (eSocial)',
-            base: 0, segurados: 0, patronal: 0, ratfap: 0, terceiros: 0, total: 0
-        });
+        state.conciliacao.inss.push(buildGovernoINSS(govData, aliqPatronal));
+
+        // IRRF: Planilha (IRRF + IRRF 13º + IRRF férias) × DCTFWeb (0561).
+        state.conciliacao.irrf = [];
+        if (excelBases.hasIrrf) {
+            state.conciliacao.irrf.push({
+                origem: 'Planilha Auxiliar (Confronto)',
+                irrfMensal: excelBases.irrfMensal,
+                irrf13: excelBases.irrf13,
+                irrfFerias: excelBases.irrfFerias,
+                total: excelBases.irrfMensal + excelBases.irrf13 + excelBases.irrfFerias
+            });
+            state.conciliacao.irrf.push(govData && govData.dctf
+                ? { origem: 'Governo (DCTFWeb)', synced: true, irrfMensal: null, irrf13: null, irrfFerias: null, total: govData.dctf.irrf }
+                : { origem: 'Governo (DCTFWeb)', synced: false });
+        }
 
         state.conciliacao.fgts = [
             {
@@ -1814,11 +1906,14 @@ async function processFiles() {
             ? `"${label}" lido do relatório`
             : `(Base INSS + Base INSS 13º) × ${aliquotaTxt} ("${label}" não encontrado no relatório)`;
         audit.formulas.push(
-            { fonte: 'Analítico', metrica: 'INSS · Base de Cálculo', formula: 'Maior "Base INSS - Envelope" do relatório', valor: inssBase },
-            { fonte: 'Analítico', metrica: 'INSS · Segurados Retido', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
-            { fonte: 'Analítico', metrica: 'INSS · Patronal (CPP)', formula: origemEncargo(pdfEncargos.inssEmpresa, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
-            { fonte: 'Analítico', metrica: 'INSS · RAT + FAP', formula: origemEncargo(pdfEncargos.inssSatAjustado || pdfEncargos.inssSat, pdfEncargos.inssSatAjustado ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
+            { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}`, valor: inssBaseEncargos },
+            { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
+            { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa
+                ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
+                : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
+            { fonte: 'Analítico', metrica: 'INSS · RAT Ajustado (1646)', formula: origemEncargo(pdfEncargos.inssSatAjustado || pdfEncargos.inssSat, pdfEncargos.inssSatAjustado ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
             { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', pctTxt(aliqTerceiros)), valor: terceiros },
+            { fonte: 'Analítico', metrica: 'INSS · Contribuintes Individuais', formula: 'Não se aplica: o Analítico do RM não traz o pró-labore do sócio', valor: null },
             { fonte: 'Analítico', metrica: 'FGTS · Base Mensal', formula: 'Maior "Base FGTS" do relatório', valor: fgtsMensalBase },
             { fonte: 'Analítico', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(base8Mensal)} × 8%) + (${formatCurrency(base2Mensal)} aprendiz × 2%)`, valor: fgtsValor },
             { fonte: 'Analítico', metrica: 'FGTS · Base 13º', formula: 'Maior "Base FGTS 13º" do relatório', valor: fgts13Base },
@@ -1826,25 +1921,53 @@ async function processFiles() {
         );
         if (state.files.planilha.length > 0) {
             const base2Excel = excelBases.fgtsZ || 0;
-            const baseEnc = excelBases.inss + excelBases.inss13;
-            const baseEncTxt = `(${formatCurrency(excelBases.inss)} + 13º ${formatCurrency(excelBases.inss13)})`;
+            const baseEnc = excelBases.inss + excelBases.inss13 + excelBases.difSal;
+            const baseEncTxt = 'Base Folha';
+            const baseCI = excelBases.prolabore + excelBases.inssAutonomo;
             audit.formulas.push(
-                { fonte: 'Planilha', metrica: 'INSS · Base de Cálculo', formula: 'Σ BASEINSS dos colaboradores com CODTIPO ≠ D', valor: excelBases.inss },
+                { fonte: 'Planilha', metrica: 'INSS · Base Folha', formula: `Σ BASEINSS ${formatCurrency(excelBases.inss)} + Σ BASEINSS13 ${formatCurrency(excelBases.inss13)} + Σ BASEFGTSDIFSAL ${formatCurrency(excelBases.difSal)} (sem CODTIPO D)`, valor: baseEnc },
                 excelBases.hasSegurados
-                    ? { fonte: 'Planilha', metrica: 'INSS · Segurados Retido', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO ≠ D', valor: excelBases.segurados }
-                    : { fonte: 'Planilha', metrica: 'INSS · Segurados Retido', formula: `${baseEncTxt} × 9% (Planilha sem coluna INSS; estimativa sem tabela progressiva)`, valor: baseEnc * 0.09 },
-                { fonte: 'Planilha', metrica: 'INSS · Patronal (CPP)', formula: `(${baseEncTxt} + autônomo ${formatCurrency(excelBases.inssAutonomo)}) × ${pctTxt(aliqPatronal)}`, valor: (baseEnc + excelBases.inssAutonomo) * aliqPatronal },
-                { fonte: 'Planilha', metrica: 'INSS · RAT + FAP', formula: `${baseEncTxt} × ${ratTxt}`, valor: baseEnc * aliqRatFap },
+                    ? { fonte: 'Planilha', metrica: 'INSS · Segurados (1082)', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO ≠ D', valor: excelBases.segurados }
+                    : { fonte: 'Planilha', metrica: 'INSS · Segurados (1082)', formula: `${baseEncTxt} × 9% (Planilha sem coluna INSS; estimativa sem tabela progressiva)`, valor: baseEnc * 0.09 },
+                { fonte: 'Planilha', metrica: 'INSS · Patronal (1138-01)', formula: `${baseEncTxt} × ${pctTxt(aliqPatronal)}`, valor: baseEnc * aliqPatronal },
+                { fonte: 'Planilha', metrica: 'INSS · RAT Ajustado (1646)', formula: `${baseEncTxt} × ${ratTxt}`, valor: baseEnc * aliqRatFap },
                 { fonte: 'Planilha', metrica: 'INSS · Terceiros', formula: `${baseEncTxt} × ${pctTxt(aliqTerceiros)}`, valor: baseEnc * aliqTerceiros },
+                { fonte: 'Planilha', metrica: 'INSS · Base Contribuintes Individuais', formula: `Pró-labore (CODTIPO D: maior entre BASEINSS e BASEIRRF) ${formatCurrency(excelBases.prolabore)} + Σ BASE_INSS_AUTONOMO ${formatCurrency(excelBases.inssAutonomo)}`, valor: baseCI },
+                { fonte: 'Planilha', metrica: 'INSS · Segurados CI (1099)', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO = D', valor: excelBases.seguradosCI },
+                { fonte: 'Planilha', metrica: 'INSS · Patronal CI (1138-04)', formula: `Base CI × ${pctTxt(aliqPatronal)}`, valor: baseCI * aliqPatronal },
+                { fonte: 'Planilha', metrica: 'INSS · Total Guia INSS', formula: 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família', valor: (state.conciliacao.inss.find(x => /Confronto/.test(x.origem)) || {}).total ?? null },
+                { fonte: 'Planilha', metrica: 'IRRF · Total IRRF', formula: `Σ IRRF ${formatCurrency(excelBases.irrfMensal)} + Σ IRRF13 ${formatCurrency(excelBases.irrf13)} + Σ IRRFFERIAS ${formatCurrency(excelBases.irrfFerias)}`, valor: excelBases.irrfMensal + excelBases.irrf13 + excelBases.irrfFerias },
                 { fonte: 'Planilha', metrica: 'FGTS · Base Mensal', formula: 'Σ (BASEFGTS + BASEFGTSAVPREVIO)', valor: excelBases.fgts },
                 { fonte: 'Planilha', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(excelBases.fgts - base2Excel)} × 8%) + (${formatCurrency(base2Excel)} CODTIPO Z × 2%)`, valor: (excelBases.fgts - base2Excel) * 0.08 + base2Excel * 0.02 },
                 { fonte: 'Planilha', metrica: 'FGTS · Base 13º', formula: 'Σ (BASEFGTS13 + BASEFGTS13AVPREVIO)', valor: excelBases.fgts13 },
                 { fonte: 'Planilha', metrica: 'FGTS · Valor 13º', formula: `${formatCurrency(excelBases.fgts13)} × 8%`, valor: excelBases.fgts13 * 0.08 }
             );
         }
+        if (govData) {
+            const govInss = state.conciliacao.inss.find(x => /Governo/.test(x.origem)) || {};
+            const codeTxt = codes => codes.map(c => `${c.codigo} ${formatCurrency(c.valor)}`).join(' + ');
+            const esCodes = govData.esocial ? Object.values(govData.esocial.codes) : [];
+            const pickCodes = pred => esCodes.filter(pred);
+            if (govData.esocial) audit.formulas.push(
+                { fonte: 'Governo', metrica: 'INSS · Base Folha', formula: `eSocial "11 - Base de cálculo" ${formatCurrency(govData.esocial.base || 0)} − Base CI (1138-04 ÷ ${pctTxt(aliqPatronal)})`, valor: govInss.base ?? null },
+                { fonte: 'Governo', metrica: 'INSS · Segurados (1082)', formula: codeTxt(pickCodes(c => c.codigo === '1082-01')), valor: govInss.segurados ?? null },
+                { fonte: 'Governo', metrica: 'INSS · Patronal (1138-01)', formula: codeTxt(pickCodes(c => c.codigo === '1138-01')), valor: govInss.patronal ?? null },
+                { fonte: 'Governo', metrica: 'INSS · RAT Ajustado (1646)', formula: codeTxt(pickCodes(c => c.codigo.startsWith('1646') || /GILRAT/i.test(c.descricao))), valor: govInss.ratfap ?? null },
+                { fonte: 'Governo', metrica: 'INSS · Terceiros', formula: codeTxt(pickCodes(c => /TERCEIROS/i.test(c.descricao))), valor: govInss.terceiros ?? null },
+                { fonte: 'Governo', metrica: 'INSS · Segurados CI (1099)', formula: codeTxt(pickCodes(c => c.codigo === '1099-01')), valor: govInss.seguradosCI ?? null },
+                { fonte: 'Governo', metrica: 'INSS · Patronal CI (1138-04)', formula: codeTxt(pickCodes(c => c.codigo === '1138-04')), valor: govInss.patronalCI ?? null }
+            );
+            if (govData.dctf) audit.formulas.push(
+                { fonte: 'Governo', metrica: 'INSS · Total Guia INSS', formula: `DCTFWeb total apurado ${formatCurrency(govData.dctf.totalApurado || 0)} − IRRF ${formatCurrency(govData.dctf.irrf || 0)}`, valor: govInss.total ?? null },
+                { fonte: 'Governo', metrica: 'IRRF · Total IRRF', formula: 'DCTFWeb: Total IRRF (0561)', valor: govData.dctf.irrf }
+            );
+        } else if (state.files.planilha.length > 0) {
+            audit.add('Governo', 'warning', 'Abas eSocial/DCTFWeb não encontradas na Planilha de Bases', 'A coluna Governo fica sem valores; inclua as abas com o resumo do eSocial (S-5011) e os débitos da DCTFWeb.');
+        }
         audit.finalizeAnalitico({
             'Base INSS': pdfBases.inss,
             'Base INSS 13º': pdfBases.inss13 || 0,
+            'Base INSS Autônomos': pdfBases.inssAuton || 0,
             'Base FGTS': pdfBases.fgts,
             'Base FGTS 13º': pdfBases.fgts13 || 0,
             'Base FGTS 2% (Aprendiz)': pdfBases.fgts2 || 0,
@@ -2572,6 +2695,98 @@ function deleteEmpresa(id) {
     }
 }
 
+// --- Valores do Governo (abas eSocial e DCTFWeb coladas na Planilha de Bases) ---
+// eSocial: resumo da folha (S-5011) com a base "11 - Base de cálculo..." e os códigos de receita
+// (1082-01, 1099-01, 1138-01/04, 1170..1200, 1646-01). DCTFWeb: débitos apurados por código,
+// "Total Apurado Empresa" e IRRF (0561). As abas são identificadas pelo conteúdo, não só pelo nome.
+function extractGovernoSummary(workbook) {
+    const toNumber = v => {
+        if (typeof v === 'number' && Number.isFinite(v)) return v;
+        if (typeof v !== 'string') return null;
+        const s = v.trim();
+        if (!/^-?[\d.]+(,\d+)?$/.test(s)) return null;
+        return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+    };
+    const codeRe = /^\s*(\d{4})-(\d{2})\b\s*-?\s*(.*)$/;
+    const result = { esocial: null, dctf: null };
+
+    workbook.SheetNames.forEach(sheetName => {
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true });
+        const text = rows.map(r => (r || []).filter(c => typeof c === 'string').join(' ')).join('\n');
+        const isESocial = /base de c[aá]lculo da contribui[cç][aã]o previdenci[aá]ria/i.test(text) || (/esocial/i.test(sheetName) && codeRe.test(text));
+        const isDctf = /d[ée]bitos apurados|total apurado/i.test(text) || /dctf/i.test(sheetName);
+        if (!isESocial && !isDctf) return;
+
+        const codes = {};
+        let base = null, totalApurado = null, totalIrrf = null;
+        rows.forEach((row, r) => {
+            row = row || [];
+            // Cada célula de texto pode ser o rótulo (a DCTFWeb tem "#VALUE!" antes dos rótulos).
+            row.forEach((cell, labelIdx) => {
+                if (typeof cell !== 'string' || !cell.trim()) return;
+                const label = cell.trim();
+                const after = row.slice(labelIdx + 1).map(toNumber).filter(v => v !== null);
+                // eSocial: valor na primeira coluna numérica; DCTFWeb: a data do PA vem antes, o saldo é o último número.
+                const value = isESocial ? after[0] : after[after.length - 1];
+                if (value === undefined) return;
+                const m = label.match(codeRe);
+                if (m) {
+                    const code = `${m[1]}-${m[2]}`;
+                    codes[code] = { codigo: code, descricao: m[3].trim(), valor: (codes[code]?.valor || 0) + value, linha: r + 1 };
+                } else if (/base de c[aá]lculo da contribui[cç][aã]o previdenci[aá]ria/i.test(label)) {
+                    base = value;
+                } else if (/^total apurado empresa/i.test(label)) {
+                    totalApurado = value;
+                } else if (/^total irrf/i.test(label)) {
+                    totalIrrf = value;
+                }
+            });
+        });
+
+        if (isESocial && !result.esocial && (base !== null || Object.keys(codes).length)) {
+            result.esocial = { aba: sheetName, base, codes };
+        } else if (isDctf && !result.dctf && (totalApurado !== null || Object.keys(codes).length)) {
+            const irrfCodes = Object.values(codes).filter(c => /^0561|^0588|^3533|^1889/.test(c.codigo) || /IRRF/i.test(c.descricao));
+            result.dctf = {
+                aba: sheetName,
+                totalApurado,
+                irrf: totalIrrf !== null ? totalIrrf : irrfCodes.reduce((a, c) => a + c.valor, 0),
+                codes
+            };
+        }
+    });
+    return result.esocial || result.dctf ? result : null;
+}
+
+// Converte os códigos de receita do eSocial/DCTFWeb nas mesmas métricas da conciliação de INSS.
+function buildGovernoINSS(gov, aliqPatronal) {
+    const empty = { origem: 'Governo (eSocial)', synced: false };
+    if (!gov) return empty;
+    const out = { origem: 'Governo (eSocial)', synced: true };
+    const es = gov.esocial;
+    if (es) {
+        const pick = pred => Object.values(es.codes).filter(pred).reduce((a, c) => a + c.valor, 0);
+        const has = pred => Object.values(es.codes).some(pred);
+        out.segurados = pick(c => c.codigo === '1082-01');
+        out.seguradosCI = has(c => c.codigo === '1099-01') ? pick(c => c.codigo === '1099-01') : null;
+        out.patronal = pick(c => c.codigo === '1138-01');
+        out.patronalCI = has(c => c.codigo === '1138-04') ? pick(c => c.codigo === '1138-04') : null;
+        out.ratfap = pick(c => c.codigo.startsWith('1646') || /GILRAT/i.test(c.descricao));
+        out.terceiros = pick(c => /TERCEIROS/i.test(c.descricao));
+        // A base do eSocial (código 11) inclui os contribuintes individuais; a base deles sai do 1138-04 ÷ alíquota patronal.
+        out.baseCI = out.patronalCI !== null && aliqPatronal > 0 ? out.patronalCI / aliqPatronal : null;
+        out.base = es.base !== null ? es.base - (out.baseCI || 0) : null;
+        out.subtotal = out.segurados + out.patronal + out.ratfap + out.terceiros;
+        out.total = out.subtotal + (out.seguradosCI || 0) + (out.patronalCI || 0);
+    }
+    if (gov.dctf && gov.dctf.totalApurado !== null) {
+        // Guia INSS da DCTFWeb = total apurado − IRRF (mesma regra da planilha: X8 = X6 − X4).
+        out.total = gov.dctf.totalApurado - (gov.dctf.irrf || 0);
+        out.origemTotal = 'DCTFWeb';
+    }
+    return out;
+}
+
 // --- Log de Conciliação (auditoria ponto a ponto) ---
 // Mantido apenas em memória: contém nomes e valores por colaborador, por isso
 // não entra em saveState() nem é enviado à API. Recriado a cada processamento.
@@ -2726,6 +2941,13 @@ function auditColumnMapping(audit, arquivo, headers, idx, requiredKeys) {
 
 // Compara Analítico × Planilha (× Governo, quando houver valor) métrica a métrica e
 // tenta explicar cada diferença com somas de colunas ou com um colaborador específico.
+const INSS_METRICS = [
+    ['base', 'Base Folha'], ['segurados', 'Segurados (1082)'], ['patronal', 'Patronal (1138-01)'],
+    ['ratfap', 'RAT Ajustado (1646)'], ['terceiros', 'Terceiros'], ['subtotal', 'Subtotal Empregados'],
+    ['baseCI', 'Base Contribuintes Individuais'], ['seguradosCI', 'Segurados CI (1099)'], ['patronalCI', 'Patronal CI (1138-04)'],
+    ['salarioFamilia', 'Salário-Família'], ['total', 'Total Guia INSS']
+];
+
 function buildDivergencias(conciliacao, audit) {
     const rows = audit.planilhaRows;
     const sum = (pick) => rows.reduce((acc, r) => acc + (pick(r) || 0), 0);
@@ -2733,8 +2955,8 @@ function buildDivergencias(conciliacao, audit) {
 
     const explainers = {
         base: [
-            { label: 'Base INSS de diretores (CODTIPO D), excluída da Planilha', value: sum(r => r.inssConsiderada ? 0 : r.baseInss) },
-            { label: 'Σ BASEINSS13 da Planilha (13º não entra na base mensal)', value: sum(r => r.baseInss13) }
+            { label: 'pró-labore (CODTIPO D), que é contribuinte individual e fica fora da base de empregados', value: sum(r => r.inssConsiderada ? 0 : r.baseInss) },
+            { label: 'Σ BASEINSS13 (base do 13º)', value: sum(r => r.inssConsiderada ? r.baseInss13 : 0) }
         ],
         baseMensal: [
             { label: 'Σ BASEFGTSAVPREVIO (aviso prévio somado na Planilha)', value: sum(r => r.baseFgtsAv) },
@@ -2748,9 +2970,9 @@ function buildDivergencias(conciliacao, audit) {
     const formulaOf = (fonte, metrica) => (audit.formulas.find(f => f.fonte === fonte && f.metrica === metrica) || {}).formula || '';
 
     const groups = [
-        { tributo: 'INSS', data: conciliacao.inss, metrics: [
-            ['base', 'Base de Cálculo'], ['segurados', 'Segurados Retido'], ['patronal', 'Patronal (CPP)'],
-            ['ratfap', 'RAT + FAP'], ['terceiros', 'Terceiros'], ['total', 'Total Geral INSS']] },
+        { tributo: 'INSS', data: conciliacao.inss, metrics: INSS_METRICS },
+        { tributo: 'IRRF', data: conciliacao.irrf, metrics: [
+            ['irrfMensal', 'IRRF Mensal'], ['irrf13', 'IRRF 13º'], ['irrfFerias', 'IRRF Férias'], ['total', 'Total IRRF']] },
         { tributo: 'FGTS', data: conciliacao.fgts, metrics: [
             ['baseMensal', 'Base Mensal'], ['valorMensal', 'Valor Mensal'], ['base13', 'Base 13º Salário'],
             ['valor13', 'Valor 13º Salário'], ['total', 'Total a Recolher']] }
@@ -2763,18 +2985,25 @@ function buildDivergencias(conciliacao, audit) {
         const planilha = data.find(s => /Confronto/.test(s.origem));
         const governo = data.find(s => /Governo|Digital/.test(s.origem));
         metrics.forEach(([key, label]) => {
-            const a = analitico ? analitico[key] || 0 : 0;
-            const p = planilha ? planilha[key] || 0 : null;
-            const g = governo && governo[key] > 0 ? governo[key] : null;
-            // "+ 0" normaliza -0 para não exibir "-R$ 0,00".
-            const diff = p === null ? null : Math.round((a - p) * 100) / 100 + 0;
+            // null = a fonte não tem esta métrica (ex.: pró-labore no Analítico); Governo só conta se importado.
+            const val = (src, k) => (src && src[k] !== null && src[k] !== undefined ? src[k] : null);
+            const a = val(analitico, key);
+            const p = val(planilha, key);
+            const govActive = governo && (governo.synced === undefined ? governo[key] > 0 : governo.synced);
+            const g = govActive ? val(governo, key) : null;
+            const round = v => Math.round(v * 100) / 100 + 0; // "+ 0" normaliza -0 (evita "-R$ 0,00")
+            const diff = a !== null && p !== null ? round(a - p) : null;
+            const ref = p !== null ? p : a; // Governo é comparado com a Planilha (ou com o Analítico, sem Planilha)
+            const difGov = g !== null && ref !== null ? round(ref - g) : null;
             const motivos = [];
 
-            if (p === null) {
-                motivos.push('Planilha de Bases não enviada: não há com o que confrontar.');
-            } else if (Math.abs(diff) < 0.01) {
-                motivos.push('Valores conferem.');
-            } else {
+            if (diff === null && difGov === null) {
+                motivos.push(p === null && planilha === undefined
+                    ? 'Planilha de Bases não enviada: não há com o que confrontar.'
+                    : 'Sem duas fontes com esta métrica para comparar.');
+            } else if (diff !== null && Math.abs(diff) < 0.01) {
+                motivos.push('Analítico e Planilha conferem.');
+            } else if (diff !== null) {
                 if (p === 0) motivos.push('Planilha zerada: verifique no bloco "Leitura da Planilha" se a tabela e as colunas foram localizadas.');
                 if (a === 0) motivos.push('Analítico zerado: o rótulo correspondente não foi encontrado no relatório (veja "Origem dos valores do Analítico").');
                 (explainers[key] || []).forEach(ex => {
@@ -2784,7 +3013,7 @@ function buildDivergencias(conciliacao, audit) {
                     const hit = rows.find(r => rowField[key](r) > 0 && near(diff, rowField[key](r)));
                     if (hit) motivos.push(`Diferença igual à base de ${hit.nome} (linha ${hit.linha} de ${hit.arquivo}).`);
                 }
-                const empField = { base: 'difInss', segurados: 'difSegurado', baseMensal: 'difFgts', base13: 'difFgts13' }[key];
+                const empField = tributo === 'IRRF' ? null : { base: 'difInss', segurados: 'difSegurado', baseMensal: 'difFgts', base13: 'difFgts13' }[key];
                 if (empField && audit.colaboradores.length > 0) {
                     // Diretores (CODTIPO D) ficam fora dos totais de INSS da Planilha; não explicam a diferença.
                     const foraDoTotal = c => (key === 'base' || key === 'segurados') && c.codtipo === 'D';
@@ -2795,15 +3024,15 @@ function buildDivergencias(conciliacao, audit) {
                         motivos.push(`${culpados.length} colaborador(es) com diferença nesta base. Maiores: ${top}. Veja a seção "Colaborador a colaborador".`);
                     }
                 }
-                if (key === 'total') {
-                    motivos.push('Total = soma das linhas acima; a diferença vem das métricas divergentes deste tributo.');
+                if (key === 'total' || key === 'subtotal') {
+                    motivos.push(`${key === 'total' ? 'Total' : 'Subtotal'} = soma das linhas acima; a diferença vem das métricas divergentes deste tributo.`);
                 }
                 const fa = formulaOf('Analítico', `${tributo} · ${label}`);
                 const fp = formulaOf('Planilha', `${tributo} · ${label}`);
                 if (/lido do relatório/.test(fa) && /×/.test(fp)) {
                     motivos.push('Analítico usa o valor apurado pelo sistema de folha; a Planilha usa alíquota fixa sobre a base. Diferença esperada mesmo com bases iguais.');
                 }
-                if (/lido do relatório/.test(fa) && ['patronal', 'ratfap', 'terceiros'].includes(key) && analitico.baseEncargos > 0 && planilha.baseEncargos > 0) {
+                if (/lido do relatório/.test(fa) && ['patronal', 'ratfap', 'terceiros'].includes(key) && analitico && planilha && analitico.baseEncargos > 0 && planilha.baseEncargos > 0) {
                     const pct = v => `${(v * 100).toFixed(4).replace('.', ',')}%`;
                     const efA = a / analitico.baseEncargos;
                     const efP = p / planilha.baseEncargos;
@@ -2817,7 +3046,15 @@ function buildDivergencias(conciliacao, audit) {
                         : 'Planilha maior: há colaboradores/valores na Planilha não refletidos no relatório.');
                 }
             }
-            result.push({ tributo, metrica: label, analitico: a, planilha: p, governo: g, diferenca: diff, motivos });
+
+            if (difGov !== null) {
+                const quem = p !== null ? 'Planilha' : 'Analítico';
+                const fonteGov = /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
+                if (Math.abs(difGov) < 0.01) motivos.push(`Confere com o ${fonteGov}.`);
+                else if (Math.abs(difGov) <= GOV_ROUNDING_TOLERANCE) motivos.push(`${quem} − ${fonteGov} = ${formatCurrency(difGov)}: arredondamento (o governo arredonda por trabalhador/estabelecimento). Aceitável.`);
+                else motivos.push(`${quem} − ${fonteGov} = ${formatCurrency(difGov)}: diferença com o governo. Confira eventos/trabalhadores enviados ao eSocial.`);
+            }
+            result.push({ tributo, metrica: label, analitico: a, planilha: p, governo: g, diferenca: diff, difGov, motivos });
         });
     });
 
@@ -2825,6 +3062,13 @@ function buildDivergencias(conciliacao, audit) {
     audit.add('Conciliação', divergentes.length ? 'warning' : 'info',
         divergentes.length ? `${divergentes.length} métrica(s) com divergência entre Analítico e Planilha` : 'Nenhuma divergência entre Analítico e Planilha',
         divergentes.map(d => `${d.tributo} ${d.metrica}: ${formatCurrency(d.diferenca)}`).join(' | '));
+    const divGov = result.filter(r => r.difGov !== null && Math.abs(r.difGov) > GOV_ROUNDING_TOLERANCE);
+    const comGov = result.filter(r => r.difGov !== null);
+    if (comGov.length) {
+        audit.add('Conciliação', divGov.length ? 'warning' : 'info',
+            divGov.length ? `${divGov.length} métrica(s) com diferença acima de R$ 1,00 em relação ao governo` : `Todas as ${comGov.length} métricas comparáveis conferem com o governo (diferenças de centavos)`,
+            comGov.map(d => `${d.tributo} ${d.metrica}: ${formatCurrency(d.difGov)}`).join(' | '));
+    }
     return result;
 }
 
@@ -2848,13 +3092,14 @@ function renderConciliacaoLog() {
         `<details class="audit-section"${open ? ' open' : ''}><summary>${title}${count !== null ? ` <span class="badge badge-info">${count}</span>` : ''}</summary><div class="table-responsive">${body}</div></details>`;
 
     const divRows = audit.divergencias.map(d => {
-        const ok = d.diferenca !== null && Math.abs(d.diferenca) < 0.01;
+        const ok = d.diferenca === null || Math.abs(d.diferenca) < 0.01;
         return `<tr>
             <td>${escapeHtml(d.tributo)} · ${escapeHtml(d.metrica)}</td>
             <td style="text-align:right; ${mono}">${money(d.analitico)}</td>
             <td style="text-align:right; ${mono}">${money(d.planilha)}</td>
             <td style="text-align:right; ${mono}">${money(d.governo)}</td>
             <td style="text-align:right; ${mono}; color:${ok ? 'var(--text-muted)' : 'var(--accent-red)'}">${money(d.diferenca)}</td>
+            <td style="text-align:right; ${mono}; color:${d.difGov === null || Math.abs(d.difGov) < 0.01 ? 'var(--text-muted)' : (Math.abs(d.difGov) <= GOV_ROUNDING_TOLERANCE ? 'var(--accent-orange)' : 'var(--accent-red)')}">${money(d.difGov)}</td>
             <td style="font-size:0.8rem">${d.motivos.map(escapeHtml).join('<br>')}</td>
         </tr>`;
     }).join('');
@@ -2893,7 +3138,7 @@ function renderConciliacaoLog() {
     const divergentes = audit.divergencias.filter(d => d.diferenca !== null && Math.abs(d.diferenca) >= 0.01).length;
     container.innerHTML = `
         <p style="font-size:0.8rem; color:var(--text-muted); margin:0 0 12px">Gerado em ${audit.createdAt.toLocaleString('pt-BR')} · ${audit.planilhaRows.length} colaboradores lidos da Planilha · ${divergentes} métrica(s) divergente(s)</p>
-        ${section('1. Divergências por métrica', divergentes, `<table class="data-table"><thead><tr><th>Métrica</th><th style="text-align:right">Analítico</th><th style="text-align:right">Planilha</th><th style="text-align:right">Governo</th><th style="text-align:right">Analítico − Planilha</th><th>Diagnóstico</th></tr></thead><tbody>${divRows}</tbody></table>`, true)}
+        ${section('1. Divergências por métrica', divergentes, `<table class="data-table"><thead><tr><th>Métrica</th><th style="text-align:right">Analítico</th><th style="text-align:right">Planilha</th><th style="text-align:right">Governo</th><th style="text-align:right">Analítico − Planilha</th><th style="text-align:right">vs Governo</th><th>Diagnóstico</th></tr></thead><tbody>${divRows}</tbody></table>`, true)}
         ${section('2. Colaborador a colaborador (Analítico × Planilha)', audit.colaboradores.filter(c => !['Confere', 'Sem bases'].includes(c.status)).length, audit.colaboradores.length === 0
             ? '<p style="color:var(--text-muted); padding:8px">Indisponível: requer o Analítico em TXT/PDF com blocos por funcionário e a Planilha de Bases.</p>'
             : `<div style="display:flex; gap:8px; flex-wrap:wrap; margin:8px 0">
@@ -2982,8 +3227,8 @@ function exportConciliacaoLog() {
 
     push('LOG DE CONCILIAÇÃO', audit.createdAt.toLocaleString('pt-BR'), `Competência ${state.competencia}`);
     push();
-    push('DIVERGÊNCIAS'); push('Tributo', 'Métrica', 'Analítico', 'Planilha', 'Governo', 'Analítico - Planilha', 'Diagnóstico');
-    audit.divergencias.forEach(d => push(d.tributo, d.metrica, num(d.analitico), num(d.planilha), num(d.governo), num(d.diferenca), d.motivos.join(' ')));
+    push('DIVERGÊNCIAS'); push('Tributo', 'Métrica', 'Analítico', 'Planilha', 'Governo', 'Analítico - Planilha', 'Planilha - Governo', 'Diagnóstico');
+    audit.divergencias.forEach(d => push(d.tributo, d.metrica, num(d.analitico), num(d.planilha), num(d.governo), num(d.diferenca), num(d.difGov), d.motivos.join(' ')));
     push();
     push('COLABORADOR A COLABORADOR');
     push('Status', 'Chapa', 'Nome', 'Tipo', 'Situação', 'Base INSS Analítico', 'Base INSS Planilha', 'Dif. INSS', 'Base FGTS Analítico', 'Base FGTS Planilha (+Av. Prévio)', 'Dif. FGTS', 'Base FGTS 13º Analítico', 'Base FGTS 13º Planilha (+Av. Prévio)', 'Dif. FGTS 13º', 'INSS Descontado Analítico', 'INSS Descontado Planilha', 'Dif. INSS Descontado', 'Origem Analítico', 'Origem Planilha');
@@ -3020,10 +3265,14 @@ function exportConciliacaoLog() {
 // --- Conciliação Logic ---
 function renderConciliacao() {
     renderINSS();
+    renderIRRF();
     renderFGTS();
     renderDesligados();
     renderConciliacaoLog();
 }
+
+// Diferença máxima aceita entre Planilha/Analítico e o governo, tratada como arredondamento.
+const GOV_ROUNDING_TOLERANCE = 1.00;
 
 function renderDynamicTable(type, metrics) {
     const dataArray = state.conciliacao[type.toLowerCase()];
@@ -3043,6 +3292,10 @@ function renderDynamicTable(type, metrics) {
     }
 
     const sources = dataArray;
+    const isGov = s => /Governo|Digital/.test(s.origem);
+    // Valor participa da divergência quando existe (null = não se aplica) e, no Governo, quando
+    // há dados importados (synced) — sem importação o Governo vem zerado e é ignorado.
+    const isActive = (s, v) => v !== null && v !== undefined && (!isGov(s) || (s.synced === undefined ? v > 0 : s.synced));
 
     // Cabeçalho dinâmico baseado nas fontes disponíveis
     let headHtml = `<tr><th style="width:30%; padding:12px 16px; text-align:left; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">Métrica / Rubrica</th>`;
@@ -3050,72 +3303,98 @@ function renderDynamicTable(type, metrics) {
         let title = s.origem;
         if (title.includes('Analítico')) title = 'Analítico (Folha)';
         else if (title.includes('Confronto')) title = 'Planilha (Bases)';
-        else if (title.includes('Governo') || title.includes('Digital')) title = type === 'FGTS' ? 'GFD (Governo)' : 'eSocial (Gov)';
+        else if (title.includes('DCTFWeb')) title = 'DCTFWeb (Gov)';
+        else if (isGov(s)) title = type === 'FGTS' ? 'GFD (Governo)' : 'eSocial (Gov)';
         headHtml += `<th style="text-align:right; padding:12px 16px; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">${title}</th>`;
     });
     headHtml += `<th style="text-align:right; padding:12px 16px; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">Divergência</th>`;
     headHtml += `<th style="width:80px; text-align:center; padding:12px 16px; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">Status</th></tr>`;
     thead.innerHTML = headHtml;
 
-    let totalMaxDiff = 0;
-    
-    tbody.innerHTML = metrics.map((m, index) => {
-        let maxDiff = 0;
-        const isTotal = m.key === 'total' || m.key === 'totalFGTS';
-        
-        let rowStyle = '';
-        if (isTotal) {
-            rowStyle = 'border-top:2px solid var(--border); background:rgba(16,185,129,0.06)';
+    // Selo do card = pior situação entre as linhas (uma linha divergente não pode ficar escondida pelo total).
+    const severity = { na: 0, ok: 1, rounding: 2, diff: 3 };
+    let worstStatus = 'na';
+
+    tbody.innerHTML = metrics.map(m => {
+        // Linha de seção (ex.: "Contribuintes individuais")
+        if (m.section) {
+            return `<tr><td colspan="${sources.length + 3}" style="padding:14px 16px 6px; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted)">${m.section}</td></tr>`;
         }
+        const isTotal = m.key === 'total' || m.key === 'totalFGTS';
+        const isSubtotal = !!m.subtotal;
+        const bold = isTotal || isSubtotal;
+        const rowStyle = isTotal
+            ? 'border-top:2px solid var(--border); background:rgba(16,185,129,0.06)'
+            : (isSubtotal ? 'border-top:1px solid var(--border); background:rgba(255,255,255,0.02)' : '');
 
         let rowHtml = `<tr style="${rowStyle}">`;
-        
-        if (isTotal) {
-             rowHtml += `<td style="padding:12px 16px; font-weight:700; color:var(--text-primary)">${m.label}</td>`;
-        } else {
-             rowHtml += `<td style="padding:10px 16px; color:var(--text-secondary)">${m.label}</td>`;
-        }
-        
-        let values = [];
+        rowHtml += bold
+            ? `<td style="padding:12px 16px; font-weight:700; color:var(--text-primary)">${m.label}</td>`
+            : `<td style="padding:10px 16px; color:var(--text-secondary)">${m.label}</td>`;
+
+        const activeValues = [];
+        const internalValues = []; // Analítico e Planilha: precisam bater ao centavo
         sources.forEach(s => {
-            const val = s[m.key] || 0;
-            values.push(val);
-            rowHtml += `<td style="text-align:right; font-family:'JetBrains Mono',monospace; ${isTotal ? 'font-weight:700; font-size:1rem; color:var(--text-secondary)' : 'font-weight:600'}">${formatCurrency(val)}</td>`;
+            const raw = s[m.key];
+            const active = isActive(s, raw);
+            if (active) activeValues.push(raw);
+            if (active && !isGov(s)) internalValues.push(raw);
+            const shown = raw === null || (isGov(s) && !active) ? '—' : formatCurrency(raw || 0);
+            rowHtml += `<td style="text-align:right; font-family:'JetBrains Mono',monospace; ${bold ? 'font-weight:700; font-size:1rem; color:var(--text-secondary)' : 'font-weight:600'}">${shown}</td>`;
         });
-        
-        // Calcular maior divergência ignorando o Governo se ele estiver zerado (não sincronizado ainda)
-        const activeValues = values.filter((v, i) => i < 2 || (i >= 2 && v > 0));
-        
-        if (activeValues.length >= 2) {
-            maxDiff = Math.max(...activeValues) - Math.min(...activeValues);
-        } else if (values.length >= 2 && values[0] > 0) {
-             // Fallback para quando Planilha for 0 e Governo for 0 (mostra a dif com a folha)
-             maxDiff = Math.abs(values[0] - values[1]);
-        }
-        
-        if (isTotal) totalMaxDiff = maxDiff;
-        
-        const isMatch = maxDiff < 0.01;
-        rowHtml += `<td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:600; ${isMatch ? 'color:var(--text-muted)' : 'color:var(--accent-red)'}">${formatCurrency(maxDiff)}</td>`;
-        rowHtml += `<td style="text-align:center">${isMatch ? '<span class="status-check ok">✓</span>' : '<span style="color:var(--accent-red); font-weight:bold">!</span>'}</td></tr>`;
+
+        const spread = vals => (vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0);
+        const maxDiff = spread(activeValues);
+        // Contra o governo, centavos são arredondamento (o eSocial arredonda por trabalhador/estabelecimento).
+        const status = activeValues.length < 2 ? 'na'
+            : maxDiff < 0.01 ? 'ok'
+            : (spread(internalValues) < 0.01 && maxDiff <= GOV_ROUNDING_TOLERANCE ? 'rounding' : 'diff');
+        if (severity[status] > severity[worstStatus]) worstStatus = status;
+
+        const diffColor = { ok: 'var(--text-muted)', rounding: 'var(--accent-orange)', diff: 'var(--accent-red)', na: 'var(--text-muted)' }[status];
+        const statusHtml = {
+            na: '<span style="color:var(--text-muted)">—</span>',
+            ok: '<span class="status-check ok">✓</span>',
+            rounding: '<span title="Diferença de centavos com o governo (arredondamento)" style="color:var(--accent-orange); font-weight:bold">≈</span>',
+            diff: '<span style="color:var(--accent-red); font-weight:bold">!</span>'
+        }[status];
+        rowHtml += `<td style="text-align:right; font-family:'JetBrains Mono',monospace; font-weight:600; color:${diffColor}">${status === 'na' ? '—' : formatCurrency(maxDiff)}</td>`;
+        rowHtml += `<td style="text-align:center">${statusHtml}</td></tr>`;
         
         return rowHtml;
     }).join('');
     
     if (statusBadge) {
-        statusBadge.className = totalMaxDiff < 0.01 ? 'badge badge-success' : 'badge badge-warning';
-        statusBadge.innerText = totalMaxDiff < 0.01 ? 'Conferido' : 'Divergência';
+        const badge = { ok: ['badge-success', 'Conferido'], na: ['badge-warning', 'Pendente'], rounding: ['badge-success', 'Conferido (± centavos)'], diff: ['badge-warning', 'Divergência'] }[worstStatus];
+        statusBadge.className = `badge ${badge[0]}`;
+        statusBadge.innerText = badge[1];
     }
 }
 
 function renderINSS() {
     renderDynamicTable('INSS', [
-        { label: 'Base de Cálculo', key: 'base' },
-        { label: 'Segurados Retido', key: 'segurados' },
-        { label: 'Patronal (CPP)', key: 'patronal' },
-        { label: 'RAT + FAP', key: 'ratfap' },
-        { label: 'Terceiros', key: 'terceiros' },
-        { label: 'Total Geral INSS', key: 'total' }
+        { section: 'Empregados' },
+        { label: 'Base Folha (mensal + 13º)', key: 'base' },
+        { label: 'Segurados Retido (1082)', key: 'segurados' },
+        { label: 'Patronal (CPP 1138-01)', key: 'patronal' },
+        { label: 'RAT Ajustado (1646)', key: 'ratfap' },
+        { label: 'Terceiros (1170–1200)', key: 'terceiros' },
+        { label: 'Subtotal Empregados', key: 'subtotal', subtotal: true },
+        { section: 'Contribuintes individuais (pró-labore + autônomos)' },
+        { label: 'Base Contribuintes Individuais', key: 'baseCI' },
+        { label: 'Segurados CI (1099)', key: 'seguradosCI' },
+        { label: 'Patronal CI (1138-04)', key: 'patronalCI' },
+        { label: '(−) Salário-Família', key: 'salarioFamilia' },
+        { label: 'Total Guia INSS', key: 'total' }
+    ]);
+}
+
+function renderIRRF() {
+    renderDynamicTable('IRRF', [
+        { label: 'IRRF Mensal', key: 'irrfMensal' },
+        { label: 'IRRF 13º Salário', key: 'irrf13' },
+        { label: 'IRRF Férias', key: 'irrfFerias' },
+        { label: 'Total IRRF (0561)', key: 'total' }
     ]);
 }
 
@@ -3443,6 +3722,7 @@ function excluirDadosCompetencia() {
             // Reset conciliação
             state.conciliacao.inss = [];
             state.conciliacao.fgts = [];
+            state.conciliacao.irrf = [];
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos

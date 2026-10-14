@@ -422,7 +422,7 @@
                 <span class="tax-icon" style="font-size:1.5rem">🛡️</span>
                 <div>
                   <h3 class="card-title">INSS & Previdência Social</h3>
-                  <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Conferência DCTFWeb vs Folha Pay</p>
+                  <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Analítico × Planilha de Bases × eSocial/DCTFWeb</p>
                 </div>
               </div>
               <span class="badge badge-success" id="statusINSS">Conferido</span>
@@ -442,6 +442,26 @@
                 <tbody id="bodyINSS">
                   <!-- populated by JS -->
                 </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- IRRF Section -->
+          <div class="card conciliacao-card" style="margin-top:24px">
+            <div class="card-header">
+              <div class="tax-info" style="display:flex;gap:12px;align-items:center">
+                <span class="tax-icon" style="font-size:1.5rem">🧾</span>
+                <div>
+                  <h3 class="card-title">IRRF</h3>
+                  <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Conferência DCTFWeb (0561) vs Planilha de Bases</p>
+                </div>
+              </div>
+              <span class="badge badge-warning" id="statusIRRF">Pendente</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead id="headIRRF"></thead>
+                <tbody id="bodyIRRF"></tbody>
               </table>
             </div>
           </div>
@@ -816,6 +836,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=25"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>
