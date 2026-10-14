@@ -1132,7 +1132,8 @@ async function processFiles() {
     try {
         let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0;
         let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
-        let pdfEncargos = { inssEmpresa: 0, inssSat: 0, inssTerceiros: 0, inssSatAjustado: 0, inssSegurado: 0, fgtsDep: 0, fgts13Dep: 0 };
+        // null = rótulo não encontrado no relatório (0 é um valor lido válido, ex.: CPP zerada no RM).
+        let pdfEncargos = { inssEmpresa: null, inssSat: null, inssTerceiros: null, inssSatAjustado: null, inssSegurado: null, fgtsDep: 0, fgts13Dep: 0 };
         const audit = createConciliacaoAudit();
 
         // 1. Processar somente arquivos reais do Relatório Analítico (PDF, TXT ou Excel)
@@ -1162,15 +1163,12 @@ async function processFiles() {
                     } else if (/^TOTAIS\b|TOTAL\s+GERAL\s+DA|^Cod\s+Descri/i.test(clean)) {
                         currentEmp = null;
                     }
+                    const rm = rmReadFields(clean);
                     if (currentEmp) {
-                        const mEmpInss = clean.match(/Base\s+INSS\s*-\s*Envelop\w*\s+([\d.]+,\d{2})/i);
-                        if (mEmpInss) currentEmp.baseInss += parseNum(mEmpInss[1]);
-                        const mEmpFgts = clean.match(/^Base\s+FGTS\s+([\d.]+,\d{2})/i);
-                        if (mEmpFgts) currentEmp.baseFgts += parseNum(mEmpFgts[1]);
-                        const mEmpFgts13 = clean.match(/^Base\s+FGTS\s+13[^\d\s(]*\s+([\d.]+,\d{2})/i);
-                        if (mEmpFgts13) currentEmp.baseFgts13 += parseNum(mEmpFgts13[1]);
-                        const mEmpSeg = clean.match(/INSS\s+Segurado\s+([\d.]+,\d{2})/i);
-                        if (mEmpSeg) currentEmp.inssSegurado += parseNum(mEmpSeg[1]);
+                        if ('baseInss' in rm) currentEmp.baseInss += rm.baseInss;
+                        if ('baseFgts' in rm) currentEmp.baseFgts += rm.baseFgts;
+                        if ('baseFgts13' in rm) currentEmp.baseFgts13 += rm.baseFgts13;
+                        if ('inssSegurado' in rm) currentEmp.inssSegurado += rm.inssSegurado;
                     }
 
                     // 1. Rubricas / Linhas Individuais do Relatório RM Labore
@@ -1209,118 +1207,54 @@ async function processFiles() {
                         state.layoutResults.analitico.fields['IRRF'] = true;
                     }
 
-                    // 2. Totais e Bases nos Blocos do Relatório
-                    // Proventos (ex: Proventos 992.802,19)
-                    const mProv = clean.match(/\bProventos\s+([\d.]+,\d{2})/i) || clean.match(/\bTotal\s+Bruto\s+([\d.]+,\d{2})/i);
-                    if (mProv) {
-                        pdfProventos = Math.max(pdfProventos, parseNum(mProv[1]));
+                    // 2. Totais e Bases nos Blocos do Relatório (rótulos completos ou truncados; ver RM_FIELDS)
+                    const take = (id, label, rule) => {
+                        if (!(id in rm)) return false;
+                        trace(label, rm[id], lineIdx, clean, rule);
+                        return true;
+                    };
+                    if (take('proventos', 'Proventos', 'max')) {
+                        pdfProventos = Math.max(pdfProventos, rm.proventos);
                         state.layoutResults.analitico.fields['Proventos'] = true;
                     }
-
-                    // Descontos (ex: Descontos 396.479,53)
-                    const mDesc = clean.match(/\bDescontos\s+([\d.]+,\d{2})/i);
-                    if (mDesc) {
-                        pdfDescontos = Math.max(pdfDescontos, parseNum(mDesc[1]));
+                    if (take('descontos', 'Descontos', 'max')) {
+                        pdfDescontos = Math.max(pdfDescontos, rm.descontos);
                         state.layoutResults.analitico.fields['Descontos'] = true;
                     }
-
-                    // Líquido nos Totais (ex: Líquido 596.322,66)
-                    const mLik = clean.match(/\bL[íi]quido\s+([\d.]+,\d{2})/i);
-                    if (mLik && pdfLiquidoFolha === 0) {
-                        pdfLiquidoFolha = parseNum(mLik[1]);
-                    }
-
-                    // Base INSS - Envelope (ex: Base INSS - Envelope 862.025,24)
-                    const mInssEnv = clean.match(/Base\s+INSS\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+([\d.]+,\d{2})/i);
-                    if (mInssEnv) {
-                        trace('Base INSS', parseNum(mInssEnv[1]), lineIdx, clean, 'max');
-                        pdfBases.inss = Math.max(pdfBases.inss, parseNum(mInssEnv[1]));
+                    if ('liquido' in rm && pdfLiquidoFolha === 0) pdfLiquidoFolha = rm.liquido;
+                    if (take('baseInss', 'Base INSS', 'max')) {
+                        pdfBases.inss = Math.max(pdfBases.inss, rm.baseInss);
                         state.layoutResults.analitico.fields['Base INSS - Envelope'] = true;
                     }
-
-                    // Base INSS 13º - Envelope
-                    const mInss13Env = clean.match(/Base\s+INSS\s+13[^\d\s]*\s*[-–]?\s*Envelope\s+([\d.]+,\d{2})/i) || clean.match(/Base\s+INSS\s+13[^\d\s]*\s+([\d.]+,\d{2})/i);
-                    if (mInss13Env) {
-                        trace('Base INSS 13º', parseNum(mInss13Env[1]), lineIdx, clean, 'max');
-                        pdfBases.inss13 = Math.max(pdfBases.inss13 || 0, parseNum(mInss13Env[1]));
+                    if (take('baseInss13', 'Base INSS 13º', 'max')) {
+                        pdfBases.inss13 = Math.max(pdfBases.inss13 || 0, rm.baseInss13);
                         state.layoutResults.analitico.fields['Base INSS 13º - Envelope'] = true;
                     }
-
-                    // Base FGTS
-                    const mFgts = clean.match(/^Base\s+FGTS\s+([\d.]+,\d{2})/i) || clean.match(/\bBase\s+FGTS\s+([\d.]+,\d{2})/i);
-                    if (mFgts && !/13|SEFIP|Menor|Afast|Ativos|Demitidos|Resc/i.test(clean)) {
-                        trace('Base FGTS', parseNum(mFgts[1]), lineIdx, clean, 'max');
-                        pdfBases.fgts = Math.max(pdfBases.fgts, parseNum(mFgts[1]));
+                    if (take('baseFgts', 'Base FGTS', 'max')) {
+                        pdfBases.fgts = Math.max(pdfBases.fgts, rm.baseFgts);
                         state.layoutResults.analitico.fields['Base FGTS'] = true;
                     }
-
-                    // Base FGTS 13º — o arquivo TXT é latin-1 lido como UTF-8, então o "º"
-                    // vira � (replacement char). Usamos [^\d\s]* para consumir qualquer
-                    // sufixo não-numérico após "13" (inclusive nenhum) antes do valor.
-                    // Também exclui variantes com sufixo de texto (SEFIP, Resc., Demit, Ativos)
-                    // para não conflitar com a regex do fgts de Base FGTS.
-                    const mFgts13 = clean.match(/^Base\s+FGTS\s+13[^\d\s]*\s+([\d.]+,\d{2})/i);
-                    if (mFgts13 && !/SEFIP|Resc|Demit|Ativos|Afast|Menor|Ind|Verde|Ant/i.test(clean)) {
-                        trace('Base FGTS 13º', parseNum(mFgts13[1]), lineIdx, clean, 'max');
-                        pdfBases.fgts13 = Math.max(pdfBases.fgts13, parseNum(mFgts13[1]));
+                    if (take('baseFgts13', 'Base FGTS 13º', 'max')) {
+                        pdfBases.fgts13 = Math.max(pdfBases.fgts13, rm.baseFgts13);
                         state.layoutResults.analitico.fields['Base FGTS 13º'] = true;
                     }
-
-                    // Base FGTS 2% (Menor Aprendiz)
-                    const mFgts2 = clean.match(/Base\s+FGTS\s+Menor\s+Apr|Base\s+FGTS\s+2%/i);
-                    if (mFgts2) {
-                        const matches = clean.match(/([\d.]+,\d{2})/g);
-                        if (matches) trace('Base FGTS 2% (Aprendiz)', parseNum(matches[matches.length - 1]), lineIdx, clean, 'max');
-                        if (matches) pdfBases.fgts2 = Math.max(pdfBases.fgts2 || 0, parseNum(matches[matches.length - 1]));
+                    if (take('baseFgts2', 'Base FGTS 2% (Aprendiz)', 'max')) {
+                        pdfBases.fgts2 = Math.max(pdfBases.fgts2 || 0, rm.baseFgts2);
                     }
-
-                    // Base IRRF
-                    // O valor precisa vir logo após "Base IRRF", o que já exclui "Base IRRF 13º/Férias/PLR".
-                    // Não filtrar a linha inteira: no RM o total geral divide a linha com "FGTS 13o. Sal.".
-                    const mIrrf = clean.match(/\bBase\s+IRRF\s+([\d.]+,\d{2})/i);
-                    if (mIrrf) {
-                        trace('Base IRRF', parseNum(mIrrf[1]), lineIdx, clean, 'max');
-                        pdfBases.irrf = Math.max(pdfBases.irrf, parseNum(mIrrf[1]));
+                    if (take('baseIrrf', 'Base IRRF', 'max')) {
+                        pdfBases.irrf = Math.max(pdfBases.irrf, rm.baseIrrf);
                         state.layoutResults.analitico.fields['IRRF'] = true;
                     }
-
-                    // Base de autônomos no total do RM ("Base INSS Auton."): a CPP do relatório inclui 20% sobre ela.
-                    const mAuton = clean.match(/Base\s+INSS\s+Aut[oô]n\w*\.?\s+([\d.]+,\d{2})/i);
-                    if (mAuton) {
-                        trace('Base INSS Autônomos', parseNum(mAuton[1]), lineIdx, clean, 'max');
-                        pdfBases.inssAuton = Math.max(pdfBases.inssAuton || 0, parseNum(mAuton[1]));
+                    // A CPP ("INSS Empresa") do RM inclui 20% sobre a base de autônomos.
+                    if (take('baseAuton', 'Base INSS Autônomos', 'max')) {
+                        pdfBases.inssAuton = Math.max(pdfBases.inssAuton || 0, rm.baseAuton);
                     }
-
-                    // Encargos Detalhados
-                    const mInssEmp = clean.match(/INSS\s+Empresa\s+([\d.]+,\d{2})/i);
-                    if (mInssEmp) {
-                        trace('INSS Empresa', parseNum(mInssEmp[1]), lineIdx, clean, 'last');
-                        pdfEncargos.inssEmpresa = parseNum(mInssEmp[1]);
-                    }
-
-                    const mInssSatAj = clean.match(/INSS\s+SAT\s+Ajustado\s+([\d.]+,\d{2})/i);
-                    if (mInssSatAj) {
-                        trace('INSS SAT Ajustado', parseNum(mInssSatAj[1]), lineIdx, clean, 'last');
-                        pdfEncargos.inssSatAjustado = parseNum(mInssSatAj[1]);
-                    } else {
-                        const mInssSat = clean.match(/INSS\s+SAT\s+([\d.]+,\d{2})/i);
-                        if (mInssSat) {
-                            trace('INSS SAT', parseNum(mInssSat[1]), lineIdx, clean, 'last');
-                            pdfEncargos.inssSat = parseNum(mInssSat[1]);
-                        }
-                    }
-
-                    const mInssTerc = clean.match(/INSS\s+Terceiro\s+([\d.]+,\d{2})/i);
-                    if (mInssTerc) {
-                        trace('INSS Terceiros', parseNum(mInssTerc[1]), lineIdx, clean, 'last');
-                        pdfEncargos.inssTerceiros = parseNum(mInssTerc[1]);
-                    }
-
-                    const mInssSeg = clean.match(/INSS\s+Segurado\s+([\d.]+,\d{2})/i);
-                    if (mInssSeg) {
-                        trace('INSS Segurado', parseNum(mInssSeg[1]), lineIdx, clean, 'last');
-                        pdfEncargos.inssSegurado = parseNum(mInssSeg[1]);
-                    }
+                    // Encargos: vale a última ocorrência (total geral no fim do relatório). 0 lido ≠ não encontrado.
+                    if (take('inssEmpresa', 'INSS Empresa', 'last')) pdfEncargos.inssEmpresa = rm.inssEmpresa;
+                    if (take('inssSatAjustado', 'INSS SAT Ajustado', 'last')) pdfEncargos.inssSatAjustado = rm.inssSatAjustado;
+                    if (take('inssSat', 'INSS SAT', 'last')) pdfEncargos.inssSat = rm.inssSat;
+                    if (take('inssTerceiro', 'INSS Terceiros', 'last')) pdfEncargos.inssTerceiros = rm.inssTerceiro;
+                    if (take('inssSegurado', 'INSS Segurado', 'last')) pdfEncargos.inssSegurado = rm.inssSegurado;
 
                     // 3. Quadro de Funcionários (Rodapé RM Labore)
                     if (/Total\s+de\s+Funcion[áa]rios:/i.test(clean) || /Ativos:/i.test(clean) || /Demitidos:/i.test(clean)) {
@@ -1774,10 +1708,10 @@ async function processFiles() {
         const inssBaseEncargos = inssBase + (pdfBases.inss13 || 0);
         // INSS Empresa do RM inclui 20% sobre autônomos; separa a parte de empregados (código 1138-01).
         const patronalCIAnalitico = (pdfBases.inssAuton || 0) * aliqPatronal;
-        const patronal  = pdfEncargos.inssEmpresa ? pdfEncargos.inssEmpresa - patronalCIAnalitico : (inssBaseEncargos * aliqPatronal);
-        const ratfap    = pdfEncargos.inssSatAjustado || pdfEncargos.inssSat || (inssBaseEncargos * aliqRatFap);
-        const terceiros = pdfEncargos.inssTerceiros || (inssBaseEncargos * aliqTerceiros);
-        const segurados = pdfEncargos.inssSegurado || (inssBaseEncargos * 0.09);
+        const patronal  = pdfEncargos.inssEmpresa !== null ? pdfEncargos.inssEmpresa - patronalCIAnalitico : (inssBaseEncargos * aliqPatronal);
+        const ratfap    = pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat ?? (inssBaseEncargos * aliqRatFap);
+        const terceiros = pdfEncargos.inssTerceiros ?? (inssBaseEncargos * aliqTerceiros);
+        const segurados = pdfEncargos.inssSegurado ?? (inssBaseEncargos * 0.09);
 
         // Valor do FGTS Mensal considerando o split de 8% e 2% (Aprendiz)
         const base2Mensal = Math.min(fgtsBase2, fgtsMensalBase);
@@ -1902,16 +1836,16 @@ async function processFiles() {
 
         const ratTxt = `${(aliqRatFap * 100).toFixed(4).replace('.', ',')}% (RAT ${cfg.rat || 2}% × FAP ${cfg.fap || 1})`;
         const pctTxt = v => `${(v * 100).toFixed(2).replace('.', ',')}%`;
-        const origemEncargo = (valorRelatorio, label, aliquotaTxt) => valorRelatorio
-            ? `"${label}" lido do relatório`
+        const origemEncargo = (valorRelatorio, label, aliquotaTxt) => valorRelatorio !== null && valorRelatorio !== undefined
+            ? `"${label}" lido do relatório${valorRelatorio === 0 ? ' (valor zerado no relatório)' : ''}`
             : `(Base INSS + Base INSS 13º) × ${aliquotaTxt} ("${label}" não encontrado no relatório)`;
         audit.formulas.push(
             { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}`, valor: inssBaseEncargos },
             { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
-            { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa
+            { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
                 ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
-            { fonte: 'Analítico', metrica: 'INSS · RAT Ajustado (1646)', formula: origemEncargo(pdfEncargos.inssSatAjustado || pdfEncargos.inssSat, pdfEncargos.inssSatAjustado ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
+            { fonte: 'Analítico', metrica: 'INSS · RAT Ajustado (1646)', formula: origemEncargo(pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat, pdfEncargos.inssSatAjustado !== null ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
             { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', pctTxt(aliqTerceiros)), valor: terceiros },
             { fonte: 'Analítico', metrica: 'INSS · Contribuintes Individuais', formula: 'Não se aplica: o Analítico do RM não traz o pró-labore do sócio', valor: null },
             { fonte: 'Analítico', metrica: 'FGTS · Base Mensal', formula: 'Maior "Base FGTS" do relatório', valor: fgtsMensalBase },
@@ -2695,6 +2629,55 @@ function deleteEmpresa(id) {
     }
 }
 
+// --- Leitura de rótulos do Analítico RM (TXT/PDF) ---
+// O RM exporta blocos "Rótulo   valor" em colunas. Conforme a largura da exportação os rótulos vêm
+// completos ("Base INSS - Envelope"), cortados em 19 ("Base INSS - Envelop") ou em 16 caracteres
+// ("Base INSS - Enve", "INSS SAT Ajustad"). Os campos abaixo são reconhecidos pelo rótulo exato ou,
+// quando o rótulo tem ao menos RM_TRUNCATED_LABEL_MIN caracteres, como prefixo do rótulo completo.
+const RM_TRUNCATED_LABEL_MIN = 14;
+const RM_FIELDS = [
+    { id: 'proventos', labels: ['Proventos', 'Total Bruto'] },
+    { id: 'descontos', labels: ['Descontos'] },
+    { id: 'liquido', labels: ['Líquido'] },
+    { id: 'baseInss', labels: ['Base INSS - Envelope', 'Base INSS'] },
+    { id: 'baseInss13', labels: ['Base INSS 13º - Envelope', 'Base INSS 13º'] },
+    { id: 'baseFgts', labels: ['Base FGTS'] },
+    { id: 'baseFgts13', labels: ['Base FGTS 13º'] },
+    { id: 'baseFgts2', labels: ['Base FGTS Menor Apr.(SEFIP)', 'Base FGTS Menor Aprendiz', 'Base FGTS 2%'] },
+    { id: 'baseIrrf', labels: ['Base IRRF'] },
+    { id: 'baseAuton', labels: ['Base INSS Auton.', 'Base INSS Autônomo'] },
+    { id: 'inssEmpresa', labels: ['INSS Empresa'] },
+    { id: 'inssSatAjustado', labels: ['INSS SAT Ajustado'] },
+    { id: 'inssSat', labels: ['INSS SAT'] },
+    { id: 'inssTerceiro', labels: ['INSS Terceiro', 'INSS Terceiros'] },
+    { id: 'inssSegurado', labels: ['INSS Segurado'] }
+];
+
+// Troca cada caractere não-ASCII por "?" e padroniza espaços: o TXT latin-1 lido como UTF-8 vira "º"/"í"
+// em "\uFFFD", então "13º" e "13\uFFFD" ficam iguais ("13?"), mas "13º Ñ" continua diferente de "13º".
+function rmNormalizeLabel(label) {
+    return String(label || '').replace(/[^\x20-\x7E]/g, '?').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+const RM_FIELD_KEYS = RM_FIELDS.map(f => ({ id: f.id, keys: f.labels.map(rmNormalizeLabel) }));
+
+function rmLabelMatches(label, keys) {
+    const l = rmNormalizeLabel(label);
+    return keys.some(k => l === k || (l.length >= RM_TRUNCATED_LABEL_MIN && k.startsWith(l)));
+}
+
+// Lê todos os pares "rótulo valor" de uma linha e devolve { idDoCampo: valor } (1ª ocorrência por campo).
+function rmReadFields(line) {
+    const found = {};
+    const re = /(\S.*?)\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})(?=\s|$)/g;
+    let m;
+    while ((m = re.exec(line))) {
+        const field = RM_FIELD_KEYS.find(f => rmLabelMatches(m[1], f.keys));
+        if (field && !(field.id in found)) found[field.id] = parseFloat(m[2].replace(/\./g, '').replace(',', '.'));
+    }
+    return found;
+}
+
 // --- Valores do Governo (abas eSocial e DCTFWeb coladas na Planilha de Bases) ---
 // eSocial: resumo da folha (S-5011) com a base "11 - Base de cálculo..." e os códigos de receita
 // (1082-01, 1099-01, 1138-01/04, 1170..1200, 1646-01). DCTFWeb: débitos apurados por código,
@@ -2815,7 +2798,7 @@ function createConciliacaoAudit() {
             this.analitico.forEach(c => (byField[c.field] = byField[c.field] || []).push(c));
             Object.entries(byField).forEach(([field, captures]) => {
                 const final = finalValues[field];
-                if (final === undefined) return;
+                if (final === undefined || final === null) return;
                 const lastIdx = captures.length - 1;
                 let marked = false;
                 captures.forEach((c, i) => {
@@ -3005,7 +2988,12 @@ function buildDivergencias(conciliacao, audit) {
                 motivos.push('Analítico e Planilha conferem.');
             } else if (diff !== null) {
                 if (p === 0) motivos.push('Planilha zerada: verifique no bloco "Leitura da Planilha" se a tabela e as colunas foram localizadas.');
-                if (a === 0) motivos.push('Analítico zerado: o rótulo correspondente não foi encontrado no relatório (veja "Origem dos valores do Analítico").');
+                if (a === 0) {
+                    const faZero = formulaOf('Analítico', `${tributo} · ${label}`);
+                    motivos.push(/lido do relatório/.test(faZero)
+                        ? 'Analítico zerado: o próprio relatório traz este valor como 0,00 (o RM não calculou). Confira a parametrização da folha.'
+                        : 'Analítico zerado: o rótulo correspondente não foi encontrado no relatório (veja "Origem dos valores do Analítico").');
+                }
                 (explainers[key] || []).forEach(ex => {
                     if (ex.value > 0 && near(diff, ex.value)) motivos.push(`Diferença igual a ${ex.label}: ${formatCurrency(ex.value)}.`);
                 });
