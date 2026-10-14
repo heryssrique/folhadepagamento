@@ -528,6 +528,18 @@
             </table>
           </div>
         </div>
+
+        <!-- Log detalhado da conciliação -->
+        <div class="card" style="margin-top:24px">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">🔎 Log de Conciliação</h3>
+              <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Origem de cada valor, memória de cálculo e diagnóstico das divergências</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="exportConciliacaoLog()">Exportar Log (CSV)</button>
+          </div>
+          <div id="conciliacaoLog"></div>
+        </div>
       </div>
       </div>
 
@@ -804,6 +816,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>
