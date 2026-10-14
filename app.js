@@ -1443,25 +1443,35 @@ async function processFiles() {
                     headerRowIndex = 0;
                     headers = jsonData[0] || [];
                 }
-                
+
+                // Helper para matching flexível de cabeçalhos de bases.
+                // Remove palavras de conexão ("DE", "DO", "DA", "E") e sinais para
+                // reconhecer variações como "Base de INSS", "Base FGTS", "Base de FGTS", etc.
+                const matchBaseHeader = (header, baseName) => {
+                    const h = normalizeHeader(header);
+                    if (h === baseName) return true;
+                    const stripped = h.replace(/\b(DE|DO|DA|DAS|DOS|E)\b/g, '');
+                    return stripped === baseName;
+                };
+
                 // Mapear campos para validação de layout
                 const requiredBasesFields = Object.keys(state.layoutResults.bases.fields);
                 requiredBasesFields.forEach(field => {
-                    if (headers.some(h => String(h||'').toUpperCase().trim().replace(/[\s_]+/g, '') === field.replace(/[\s_]+/g, ''))) {
+                    if (headers.some(h => matchBaseHeader(h, field.replace(/[\s_]+/g, '')))) {
                         state.layoutResults.bases.fields[field] = true;
                     }
                 });
 
                 const idx = {
                     nome: headers.findIndex(h => normalizeHeader(h) === 'NOME'),
-                    inss: headers.findIndex(h => normalizeHeader(h) === 'BASEINSS'),
-                    inss13: headers.findIndex(h => normalizeHeader(h) === 'BASEINSS13'),
-                    inssAutonomo: headers.findIndex(h => normalizeHeader(h) === 'BASEINSSAUTONOMO'),
-                    fgts: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS'),
-                    fgtsAv: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTSAVPREVIO'),
-                    fgts13Av: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS13AVPREVIO'),
-                    fgts13: headers.findIndex(h => normalizeHeader(h) === 'BASEFGTS13'),
-                    irrf: headers.findIndex(h => normalizeHeader(h) === 'BASEIRRF'),
+                    inss: headers.findIndex(h => matchBaseHeader(h, 'BASEINSS')),
+                    inss13: headers.findIndex(h => matchBaseHeader(h, 'BASEINSS13')),
+                    inssAutonomo: headers.findIndex(h => matchBaseHeader(h, 'BASEINSSAUTONOMO')),
+                    fgts: headers.findIndex(h => matchBaseHeader(h, 'BASEFGTS')),
+                    fgtsAv: headers.findIndex(h => matchBaseHeader(h, 'BASEFGTSAVPREVIO')),
+                    fgts13Av: headers.findIndex(h => matchBaseHeader(h, 'BASEFGTS13AVPREVIO')),
+                    fgts13: headers.findIndex(h => matchBaseHeader(h, 'BASEFGTS13')),
+                    irrf: headers.findIndex(h => matchBaseHeader(h, 'BASEIRRF')),
                     bruto: headers.findIndex(h => /total\s+proventos|bruto|vencimentos/i.test(String(h || ''))),
                     descontos: headers.findIndex(h => /total\s+descontos|descontos/i.test(String(h || ''))),
                     liquido: headers.findIndex(h => /valor\s+liquido|liquido/i.test(String(h || ''))),
