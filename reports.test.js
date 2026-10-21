@@ -89,6 +89,14 @@ test('resumo usa apenas totais reais do estado, sem rubricas fictícias', () => 
     assert.equal(nodes.previewTitle.innerText, 'Resumo Consolidado da Folha');
 });
 
+test('resumo calcula líquido como bruto menos descontos quando o campo líquido está ausente', () => {
+    const { context, nodes } = createHarness();
+    vm.runInContext('delete state.summary.liquidoFolha', context);
+    vm.runInContext("generateReport('resumo')", context);
+    assert.match(nodes.reportContent.innerHTML, /R\$[^<]*8\.800,00/);
+    assert.doesNotMatch(nodes.reportContent.innerHTML, /NaN/);
+});
+
 test('cada tipo de relatório mostra dados ou explica por que não pode ser gerado', () => {
     const { context, nodes } = createHarness();
     const expected = {

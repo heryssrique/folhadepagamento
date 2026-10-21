@@ -2478,6 +2478,9 @@ function generateReport(type) {
     title.innerText = titles[type] || 'Relatório indisponível';
 
     const summary = state.summary || {};
+    const liquidAmount = Number.isFinite(Number(summary.liquidoFolha))
+        ? Number(summary.liquidoFolha)
+        : Number(summary.bruto || 0) - Number(summary.descontos || 0);
     const details = {
         resumo: () => renderReportTable(
             ['Indicador', 'Quantidade / Valor'],
@@ -2487,7 +2490,7 @@ function generateReport(type) {
                 ['Colaboradores desligados', String(summary.desligados ?? 0)],
                 ['Total bruto', reportMoney(summary.bruto)],
                 ['Descontos', reportMoney(summary.descontos)],
-                ['Líquido da folha', reportMoney(summary.liquidoFolha)],
+                ['Líquido da folha', reportMoney(liquidAmount)],
                 ['Líquido de pró-labore', reportMoney(summary.liquidoProLabore)]
             ]),
         validacao: () => renderReportTable(
