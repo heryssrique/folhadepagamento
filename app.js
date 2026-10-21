@@ -2449,67 +2449,109 @@ function updateDashboardAlerts() {
 }
 
 // --- Report Generation ---
+function renderReportTable(headers, rows) {
+    const th = headers.map(label => `<th style="padding:10px; border:1px solid #ddd; text-align:left">${escapeHtml(label)}</th>`).join('');
+    const body = rows.length
+        ? rows.map(row => `<tr>${row.map(value => `<td style="padding:10px; border:1px solid #ddd">${escapeHtml(value)}</td>`).join('')}</tr>`).join('')
+        : `<tr><td colspan="${headers.length}" style="padding:12px; border:1px solid #ddd; color:#666">Nenhum dado disponível para esta competência.</td></tr>`;
+    return `<table style="width:100%; border-collapse:collapse"><thead><tr style="background:#f8fafc">${th}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function reportMoney(value) {
+    return value === null || value === undefined || !Number.isFinite(Number(value)) ? '—' : formatCurrency(Number(value));
+}
+
 function generateReport(type) {
     const preview = document.getElementById('reportPreview');
     const content = document.getElementById('reportContent');
     const title = document.getElementById('previewTitle');
-    
-    preview.style.display = 'block';
-    
+    if (!preview || !content || !title) return;
+
     const titles = {
-        'resumo': 'Resumo Consolidado da Folha',
-        'validacao': 'Relatório de Validação e Auditoria',
-        'encargos': 'Darf INSS / Guia FGTS Digital',
-        'holerites': 'Contracheques da Competência',
-        'divergencias': 'Inconsistências Identificadas',
-        'historico': 'Log de Atividades RH'
+        resumo: 'Resumo Consolidado da Folha',
+        validacao: 'Relatório de Validação e Auditoria',
+        encargos: 'Encargos Sociais da Competência',
+        holerites: 'Contracheques da Competência',
+        divergencias: 'Inconsistências Identificadas',
+        historico: 'Log de Atividades RH'
     };
-    
-    title.innerText = titles[type];
-    
-    let html = `
+    title.innerText = titles[type] || 'Relatório indisponível';
+
+    const summary = state.summary || {};
+    const liquidAmount = Number.isFinite(Number(summary.liquidoFolha))
+        ? Number(summary.liquidoFolha)
+        : Number(summary.bruto || 0) - Number(summary.descontos || 0);
+    const details = {
+        resumo: () => renderReportTable(
+            ['Indicador', 'Quantidade / Valor'],
+            [
+                ['Colaboradores ativos', String(summary.ativos ?? 0)],
+                ['Colaboradores afastados', String(summary.afastados ?? 0)],
+                ['Colaboradores desligados', String(summary.desligados ?? 0)],
+                ['Total bruto', reportMoney(summary.bruto)],
+                ['Descontos', reportMoney(summary.descontos)],
+                ['Líquido da folha', reportMoney(liquidAmount)],
+                ['Líquido de pró-labore', reportMoney(summary.liquidoProLabore)]
+            ]),
+        validacao: () => renderReportTable(
+            ['Validação', 'Status', 'Detalhe'],
+            (state.validations || []).map(v => [v.title || v.id || 'Validação', v.status || 'Pendente', String(v.desc || '').replace(/<[^>]*>/g, '')])
+        ),
+        encargos: () => {
+            const groups = [
+                ['INSS', state.conciliacao?.inss || [], [['Base Folha', 'base'], ['Segurados (1082)', 'segurados'], ['Patronal (1138-01)', 'patronal'], ['RAT Ajustado (1646)', 'ratfap'], ['Terceiros', 'terceiros'], ['Subtotal Empregados', 'subtotal'], ['Base Contribuintes Individuais', 'baseCI'], ['Segurados CI (1099)', 'seguradosCI'], ['Patronal CI (1138-04)', 'patronalCI'], ['Salário-Família', 'salarioFamilia'], ['Total Guia INSS', 'total']]],
+                ['IRRF', state.conciliacao?.irrf || [], [['IRRF Mensal', 'irrfMensal'], ['IRRF 13º', 'irrf13'], ['IRRF Férias', 'irrfFerias'], ['Total IRRF', 'total']]],
+                ['FGTS', state.conciliacao?.fgts || [], [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total']]]
+            ];
+            return groups.map(([name, sources, metrics]) => {
+                const table = renderReportTable(['Métrica', ...sources.map(s => s.origem || 'Fonte')], metrics.map(([label, key]) => [label, ...sources.map(s => reportMoney(s[key]))]));
+                return `<h3 style="margin:20px 0 8px">${name}</h3>${table}`;
+            }).join('');
+        },
+        holerites: () => '<p>Não é possível emitir holerites individuais com os dados disponíveis. Esta aplicação importa totais e bases para conferência, mas não mantém os eventos individualizados de proventos e descontos necessários para compor contracheques. Nenhum holerite foi gerado.</p>',
+        divergencias: () => {
+            const rows = conciliacaoAudit?.divergencias || [];
+            return rows.length
+                ? renderReportTable(['Tributo', 'Métrica', 'Analítico', 'Planilha', 'Governo', 'Analítico − Planilha', 'Planilha − Governo', 'Diagnóstico'], rows.map(d => [d.tributo, d.metrica, reportMoney(d.analitico), reportMoney(d.planilha), reportMoney(d.governo), reportMoney(d.diferenca), reportMoney(d.difGov), (d.motivos || []).join(' ') ]))
+                : '<p>Não há log de conciliação disponível nesta sessão. Processe os arquivos na competência atual para gerar as divergências.</p>';
+        },
+        historico: () => {
+            const entries = conciliacaoAudit?.entries || [];
+            return entries.length
+                ? renderReportTable(['Etapa', 'Nível', 'Evento', 'Detalhe'], entries.map(e => [e.stage, e.level, e.message, e.detail]))
+                : '<p>Não há eventos de processamento disponíveis nesta sessão. O histórico detalhado é mantido apenas durante a sessão atual do navegador.</p>';
+        }
+    };
+
+    const body = details[type] ? details[type]() : '<p>Tipo de relatório desconhecido.</p>';
+    content.innerHTML = `
         <div style="display:flex; justify-content:space-between; border-bottom:2px solid #333; padding-bottom:15px; margin-bottom:20px">
             <div>
-                <h2 style="margin:0">FolhaPay Report</h2>
-                <p style="margin:5px 0; color:#666">Competência: ${getCompetenciaExtenso()}</p>
+                <h2 style="margin:0">FolhaPay</h2>
+                <p style="margin:5px 0; color:#666">Competência: ${escapeHtml(getCompetenciaExtenso())}</p>
             </div>
             <div style="text-align:right">
-                <p style="margin:0; font-weight:700">${state.config.empresa}</p>
-                <p style="margin:5px 0; color:#666">CNPJ: ${state.config.cnpj}</p>
+                <p style="margin:0; font-weight:700">${escapeHtml(state.config?.empresa || 'Empresa não informada')}</p>
+                <p style="margin:5px 0; color:#666">CNPJ: ${escapeHtml(state.config?.cnpj || '—')}</p>
             </div>
         </div>
+        ${body}
     `;
-    
-    if (type === 'resumo') {
-        html += `
-            <table style="width:100%; border-collapse:collapse">
-                <tr style="background:#f8fafc"><th style="text-align:left; padding:10px; border:1px solid #ddd">Rubrica</th><th style="padding:10px; border:1px solid #ddd; text-align:right">Colaboradores</th><th style="padding:10px; border:1px solid #ddd; text-align:right">Valor Total</th></tr>
-                <tr><td style="padding:10px; border:1px solid #ddd">001 - Salário Base</td><td style="text-align:right; padding:10px; border:1px solid #ddd">124</td><td style="text-align:right; padding:10px; border:1px solid #ddd">${formatCurrency(412000.00)}</td></tr>
-                <tr><td style="padding:10px; border:1px solid #ddd">005 - Horas Extras 50%</td><td style="text-align:right; padding:10px; border:1px solid #ddd">32</td><td style="text-align:right; padding:10px; border:1px solid #ddd">${formatCurrency(18500.50)}</td></tr>
-                <tr><td style="padding:10px; border:1px solid #ddd">012 - Gratificações</td><td style="text-align:right; padding:10px; border:1px solid #ddd">15</td><td style="text-align:right; padding:10px; border:1px solid #ddd">${formatCurrency(22429.50)}</td></tr>
-                <tr style="font-weight:700"><td style="padding:10px; border:1px solid #ddd; background:#f0f9ff">TOTAL BRUTO</td><td style="text-align:right; padding:10px; border:1px solid #ddd; background:#f0f9ff">-</td><td style="text-align:right; padding:10px; border:1px solid #ddd; background:#f0f9ff">${formatCurrency(state.summary.bruto)}</td></tr>
-                <tr><td style="padding:10px; border:1px solid #ddd">501 - INSS Retido</td><td style="text-align:right; padding:10px; border:1px solid #ddd">124</td><td style="text-align:right; padding:10px; border:1px solid #ddd">${formatCurrency(48200.40)}</td></tr>
-                <tr><td style="padding:10px; border:1px solid #ddd">505 - IRRF Retido</td><td style="text-align:right; padding:10px; border:1px solid #ddd">88</td><td style="text-align:right; padding:10px; border:1px solid #ddd">${formatCurrency(64250.00)}</td></tr>
-                <tr style="font-weight:700"><td style="padding:10px; border:1px solid #ddd; background:#fff1f2">TOTAL LÍQUIDO</td><td style="text-align:right; padding:10px; border:1px solid #ddd; background:#fff1f2">-</td><td style="text-align:right; padding:10px; border:1px solid #ddd; background:#fff1f2">${formatCurrency(state.summary.liquido)}</td></tr>
-            </table>
-        `;
-    } else {
-        html += `<div style="text-align:center; padding:50px; color:#999"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" width="60" style="margin-bottom:10px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><p>Dados do relatório de ${type} sendo carregados...</p></div>`;
-    }
-    
-    content.innerHTML = html;
+    preview.style.display = 'block';
     window.scrollTo({ top: content.offsetTop, behavior: 'smooth' });
 }
 
 function printReport() {
+    const content = document.getElementById('reportContent');
+    if (!content || !content.innerHTML.trim()) {
+        showToast('Gere um relatório antes de imprimir ou salvar em PDF.', 'warning');
+        return;
+    }
     window.print();
 }
 
 function downloadReport() {
-    showToast('Iniciando exportação para PDF...', 'info');
-    setTimeout(() => {
-        showToast('Download concluído!', 'success');
-    }, 1500);
+    printReport();
 }
 
 // --- Configuration Logic ---
@@ -3575,10 +3617,44 @@ function renderDesligados() {
 
 
 function exportConciliacao() {
-    showToast('Gerando planilha de conciliação...', 'info');
-    setTimeout(() => {
-        showToast('Exportação concluída!', 'success');
-    }, 1500);
+    if (typeof XLSX === 'undefined' || !XLSX.utils?.book_new || !XLSX.utils?.aoa_to_sheet || !XLSX.writeFile) {
+        showToast('Biblioteca XLSX indisponível. Recarregue a página e tente novamente.', 'error');
+        return;
+    }
+
+    try {
+        const workbook = XLSX.utils.book_new();
+        const definitions = [
+            { name: 'INSS', sources: state.conciliacao?.inss || [], metrics: [['Base Folha', 'base'], ['Segurados (1082)', 'segurados'], ['Patronal (1138-01)', 'patronal'], ['RAT Ajustado (1646)', 'ratfap'], ['Terceiros', 'terceiros'], ['Subtotal Empregados', 'subtotal'], ['Base Contribuintes Individuais', 'baseCI'], ['Segurados CI (1099)', 'seguradosCI'], ['Patronal CI (1138-04)', 'patronalCI'], ['Salário-Família', 'salarioFamilia'], ['Total Guia INSS', 'total']] },
+            { name: 'IRRF', sources: state.conciliacao?.irrf || [], metrics: [['IRRF Mensal', 'irrfMensal'], ['IRRF 13º', 'irrf13'], ['IRRF Férias', 'irrfFerias'], ['Total IRRF', 'total']] },
+            { name: 'FGTS', sources: state.conciliacao?.fgts || [], metrics: [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total']] },
+            { name: 'Desligados', sources: state.conciliacao?.desligados || [], metrics: [['Quantidade', 'qtd'], ['FGTS Quitação', 'fgtsQuitacao'], ['FGTS Mês Anterior', 'fgtsMesAnterior'], ['FGTS Aviso Prévio', 'fgtsAvisoPrevio'], ['FGTS Artigo 22', 'fgtsArtigo22'], ['FGTS 13º Indenizado', 'fgts13Indenizado'], ['FGTS 13º Rescisão', 'fgts13Rescisao'], ['Total FGTS Rescisório', 'totalFGTS'], ['Base Rescisória Calculada', 'baseRescisoriaCalculada']] }
+        ];
+
+        definitions.forEach(({ name, sources, metrics }) => {
+            const rows = [
+                ['Competência', state.competencia],
+                ['Métrica', ...sources.map(source => source.origem || 'Fonte')]
+            ];
+            metrics.forEach(([label, key]) => rows.push([label, ...sources.map(source => source[key] ?? '')]));
+            if (sources.length === 0) rows.push(['Sem dados disponíveis para esta competência.']);
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), name);
+        });
+
+        if (conciliacaoAudit?.divergencias?.length) {
+            const rows = [['Tributo', 'Métrica', 'Analítico', 'Planilha', 'Governo', 'Analítico − Planilha', 'Planilha − Governo', 'Diagnóstico']];
+            conciliacaoAudit.divergencias.forEach(d => rows.push([
+                d.tributo, d.metrica, d.analitico ?? '', d.planilha ?? '', d.governo ?? '', d.diferenca ?? '', d.difGov ?? '', (d.motivos || []).join(' ')
+            ]));
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Divergências');
+        }
+
+        XLSX.writeFile(workbook, `conciliacao-${state.competencia}.xlsx`);
+        showToast('Planilha de conciliação exportada.', 'success');
+    } catch (error) {
+        console.error('Erro ao exportar conciliação:', error);
+        showToast('Não foi possível gerar a planilha de conciliação.', 'error');
+    }
 }
 
 function updateCompetencia() {
