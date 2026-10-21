@@ -948,6 +948,67 @@ body {
   min-height: 400px;
 }
 
+@media print {
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .main-content {
+    height: auto !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  .view-container {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .view {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  #reportPreview,
+  #reportPreview * {
+    visibility: visible !important;
+  }
+
+  #reportPreview {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #reportPreview .card-header button {
+    display: none !important;
+  }
+
+  .report-preview-content {
+    min-height: 0;
+    padding: 0;
+    color: #000;
+  }
+
+  .report-preview-content table {
+    break-inside: auto;
+  }
+
+  .report-preview-content tr,
+  .report-preview-content h3 {
+    break-inside: avoid;
+  }
+}
+
 /* =============================================
    CONFIG
    ============================================= */
