@@ -532,7 +532,7 @@ function processUploadedFiles(fileList, type) {
 function renderFilePreviews() {
     // Update individual dropzone previews
     // Slots com arquivo único
-    ['encargos'].forEach(type => {
+    ['encargos', 'fgtsDigital'].forEach(type => {
         const file = state.files[type];
         const previewEl = document.getElementById(`preview-${type}`);
         const statusEl  = document.getElementById(`status-${type}`);
@@ -589,6 +589,7 @@ function renderFilePreviews() {
     state.files.pdf.forEach((f, idx) => allFileItems.push({ type: 'PDF', file: f, key: 'pdf', index: idx }));
     if (state.files.ponto) allFileItems.push({ type: 'Ponto', file: state.files.ponto, key: 'ponto' });
     if (state.files.encargos) allFileItems.push({ type: 'Encargos', file: state.files.encargos, key: 'encargos' });
+    if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
 
     if (allFileItems.length === 0) {
         html = `
@@ -1527,7 +1528,9 @@ async function processFiles() {
                     salarioFamilia: headers.findIndex(h => /^(VALOR)?SAL(ARIO)?FAM(ILIA)?$/.test(normalizeHeader(h))),
                     irrfValor: headers.findIndex(h => normalizeHeader(h) === 'IRRF'),
                     irrf13Valor: headers.findIndex(h => normalizeHeader(h) === 'IRRF13'),
-                    irrfFeriasValor: headers.findIndex(h => normalizeHeader(h) === 'IRRFFERIAS')
+                    irrfFeriasValor: headers.findIndex(h => normalizeHeader(h) === 'IRRFFERIAS'),
+                    // Valor do FGTS por colaborador (comparado com o retorno do FGTS Digital).
+                    fgtsValores: ['FGTSMES', 'FGTSAVISO', 'FGTS13AVISO', 'FGTS13', 'FGTSDIF'].map(k => headers.findIndex(h => normalizeHeader(h) === k))
                 };
                 const rows = jsonData.slice(headerRowIndex + 1);
                 auditColumnMapping(audit, planilhaFile.name, headers, idx, ['inss', 'fgts', 'fgts13']);
@@ -1633,6 +1636,8 @@ async function processFiles() {
                         baseFgtsAv: valFgtsAv,
                         baseFgts13: valFgts13,
                         baseFgts13Av: valFgts13Av,
+                        baseFgtsDifSal: val('baseDifSal'),
+                        fgtsValor: idx.fgtsValores.reduce((acc, c) => acc + (c !== -1 ? parseV(row[c]) : 0), 0),
                         baseIrrf: idx.irrf !== -1 ? parseV(row[idx.irrf]) : 0
                     });
                     
@@ -1948,6 +1953,9 @@ async function processFiles() {
             'INSS Segurado': pdfEncargos.inssSegurado
         });
         audit.colaboradores = buildComparacaoColaboradores(audit);
+        if (state.files.fgtsDigital && !isVirtual(state.files.fgtsDigital)) {
+            audit.fgtsDigital = buildComparacaoFgtsDigital(audit, state.files.fgtsDigital.name, await state.files.fgtsDigital.text());
+        }
         audit.divergencias = buildDivergencias(state.conciliacao, audit);
         conciliacaoAudit = audit;
 
@@ -2873,6 +2881,7 @@ function createConciliacaoAudit() {
         planilhaRows: [],  // um registro por colaborador lido da Planilha de Bases
         analiticoEmployees: [], // bases por funcionário lidas dos blocos do Analítico (TXT/PDF)
         colaboradores: [], // comparação colaborador a colaborador (preenchida por buildComparacaoColaboradores)
+        fgtsDigital: [],   // FGTS Digital × Planilha por trabalhador (buildComparacaoFgtsDigital)
         formulas: [],      // memória de cálculo: { fonte, metrica, formula, valor }
         divergencias: [],
         add(stage, level, message, detail = '') {
@@ -3000,6 +3009,68 @@ function buildComparacaoColaboradores(audit) {
     audit.add('Conciliação', count('Divergente') + count('Só no Analítico') + count('Só na Planilha') ? 'warning' : 'info',
         `Colaborador a colaborador: ${count('Confere')} conferem, ${count('Reclassificado')} reclassificados (mensal ↔ 13º, mesmo total), ${count('Divergente')} divergentes, ${count('Só no Analítico')} só no Analítico, ${count('Só na Planilha')} só na Planilha, ${count('Sem bases')} sem bases`,
         `${audit.analiticoEmployees.length} blocos no Analítico × ${audit.planilhaRows.length} linhas na Planilha`);
+    return result;
+}
+
+// Cruza, por nome, o retorno do FGTS Digital ("..._Trabalhadores.csv") com a Planilha de Bases:
+// base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL;
+// valor = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF.
+function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
+    const lines = csvText.split(/\r?\n/).filter(l => l.trim()).map(l => l.split(';').map(c => c.trim().replace(/^"|"$/g, '')));
+    const header = lines[0] || [];
+    const col = name => header.indexOf(name);
+    const required = ['Nome Trabalhador', 'Base Remuneracao Total', 'Valor FGTS na Guia'];
+    const missing = required.filter(name => col(name) === -1);
+    if (missing.length) {
+        audit.add('FGTS Digital', 'error', `Colunas ausentes em ${arquivo}: ${missing.join(', ')}`, 'Comparação FGTS Digital × Planilha não realizada');
+        return [];
+    }
+    const num = v => parseFloat(String(v || '').replace(/\./g, '').replace(',', '.')) || 0;
+    // FGTS Digital grava nomes sem acento ("PALACIOS") e a Planilha com ("PALÁCIOS").
+    const nameKey = nome => auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+    const guia = new Map();
+    lines.slice(1).forEach(r => {
+        // Depósito rescisório (multa) não está nas colunas da Planilha; só o mensal entra na comparação.
+        if (/rescis/i.test(r[col('Tipo Deposito')] || '')) return;
+        const key = nameKey(r[col('Nome Trabalhador')]);
+        const acc = guia.get(key) || { nome: r[col('Nome Trabalhador')], base: 0, fgts: 0 };
+        acc.base += num(r[col('Base Remuneracao Total')]);
+        acc.fgts += num(r[col('Valor FGTS na Guia')]);
+        guia.set(key, acc);
+    });
+    const planilha = new Map();
+    audit.planilhaRows.forEach(r => {
+        const key = nameKey(r.nome);
+        const acc = planilha.get(key) || { nome: r.nome, base: 0, fgts: 0 };
+        acc.base += r.baseFgts + r.baseFgtsAv + r.baseFgts13Av + r.baseFgts13 + (r.baseFgtsDifSal || 0);
+        acc.fgts += r.fgtsValor || 0;
+        planilha.set(key, acc);
+    });
+
+    const d = (x, y) => Math.round(((x || 0) - (y || 0)) * 100) / 100 + 0;
+    const result = [];
+    new Set([...guia.keys(), ...planilha.keys()]).forEach(key => {
+        const g = guia.get(key), p = planilha.get(key);
+        // Sem FGTS na Planilha e fora da guia (ex.: pró-labore): nada a comparar.
+        if (!g && Math.abs(p.base) < 0.01 && Math.abs(p.fgts) < 0.01) return;
+        const item = {
+            nome: (g || p).nome,
+            basePlanilha: p ? p.base : null, baseGuia: g ? g.base : null,
+            fgtsPlanilha: p ? p.fgts : null, fgtsGuia: g ? g.fgts : null
+        };
+        item.difBase = d(item.basePlanilha, item.baseGuia);
+        item.difFgts = d(item.fgtsPlanilha, item.fgtsGuia);
+        item.status = !p ? 'Só no FGTS Digital' : !g ? 'Só na Planilha'
+            : Math.abs(item.difBase) >= 0.01 || Math.abs(item.difFgts) > AUDIT_TOLERANCE ? 'Divergente' : 'Confere';
+        result.push(item);
+    });
+    const order = { 'Divergente': 0, 'Só no FGTS Digital': 1, 'Só na Planilha': 2, 'Confere': 3 };
+    result.sort((x, y) => order[x.status] - order[y.status] || Math.abs(y.difFgts) - Math.abs(x.difFgts));
+
+    const count = status => result.filter(r => r.status === status).length;
+    audit.add('FGTS Digital', result.length === count('Confere') ? 'info' : 'warning',
+        `FGTS Digital × Planilha: ${count('Confere')} conferem, ${count('Divergente')} divergentes, ${count('Só no FGTS Digital')} só no FGTS Digital, ${count('Só na Planilha')} só na Planilha`,
+        `${guia.size} trabalhadores em ${arquivo} × ${planilha.size} colaboradores na Planilha`);
     return result;
 }
 
@@ -3244,6 +3315,19 @@ function renderConciliacaoLog() {
                 <th style="text-align:right">Base INSS Analítico (mensal + 13º)</th><th style="text-align:right">Base INSS Planilha (mensal + 13º)</th><th style="text-align:right">Dif. INSS</th>
                 <th style="text-align:right">FGTS Analítico</th><th style="text-align:right">FGTS Planilha</th><th style="text-align:right">Dif. FGTS</th>
                 <th style="text-align:right">Dif. FGTS 13º</th><th style="text-align:right">INSS desc. Analítico</th><th style="text-align:right">INSS desc. Planilha</th><th style="text-align:right">Dif. INSS desc.</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
+        ${audit.fgtsDigital.length === 0 ? '' : section('2b. FGTS Digital × Planilha (por trabalhador)', audit.fgtsDigital.filter(c => c.status !== 'Confere').length,
+            `<p style="font-size:0.8rem; color:var(--text-muted); margin:8px 0">Base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL · FGTS = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF. Lista só as divergências (${audit.fgtsDigital.filter(c => c.status === 'Confere').length} conferem).</p>
+            <table class="data-table"><thead><tr><th>Status</th><th>Nome</th>
+                <th style="text-align:right">Base Planilha</th><th style="text-align:right">Base FGTS Digital</th><th style="text-align:right">Dif. Base</th>
+                <th style="text-align:right">FGTS Planilha</th><th style="text-align:right">FGTS na Guia</th><th style="text-align:right">Dif. FGTS</th></tr></thead><tbody>${
+                audit.fgtsDigital.filter(c => c.status !== 'Confere').map(c => `<tr>
+                    <td style="color:${c.status === 'Divergente' ? 'var(--accent-red)' : 'var(--accent-orange)'}; font-weight:600">${escapeHtml(c.status)}</td>
+                    <td>${escapeHtml(c.nome)}</td>
+                    <td style="text-align:right; ${mono}">${money(c.basePlanilha)}</td><td style="text-align:right; ${mono}">${money(c.baseGuia)}</td>
+                    <td style="text-align:right; ${mono}; color:${Math.abs(c.difBase) >= 0.01 ? 'var(--accent-red)' : 'var(--text-muted)'}">${formatCurrency(c.difBase)}</td>
+                    <td style="text-align:right; ${mono}">${money(c.fgtsPlanilha)}</td><td style="text-align:right; ${mono}">${money(c.fgtsGuia)}</td>
+                    <td style="text-align:right; ${mono}; color:${Math.abs(c.difFgts) >= 0.01 ? 'var(--accent-red)' : 'var(--text-muted)'}">${formatCurrency(c.difFgts)}</td>
+                </tr>`).join('') || '<tr><td colspan="8" style="color:var(--accent-green)">Todos os trabalhadores conferem.</td></tr>'}</tbody></table>`, true)}
         ${section('3. Origem dos valores do Analítico', usedCaptures.length, `<table class="data-table"><thead><tr><th>Campo</th><th style="text-align:right">Valor</th><th>Arquivo : linha</th><th>Trecho lido</th><th style="text-align:center">Regra</th></tr></thead><tbody>${analiticoRows}</tbody></table>`)}
         ${section('4. Leitura da Planilha de Bases (colunas)', null, `<table class="data-table"><thead><tr><th>Arquivo</th><th>Campo</th><th style="text-align:center">Coluna</th><th>Cabeçalho encontrado</th></tr></thead><tbody>${columnRows}</tbody></table>`)}
         ${section('5. Memória de cálculo', audit.formulas.length, `<table class="data-table"><thead><tr><th>Fonte</th><th>Métrica</th><th>Fórmula / origem</th><th style="text-align:right">Valor</th></tr></thead><tbody>${formulaRows}</tbody></table>`)}
@@ -3852,7 +3936,7 @@ function excluirDadosCompetencia() {
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos
-            ['planilha', 'pdf', 'encargos'].forEach(id => {
+            ['planilha', 'pdf', 'encargos', 'fgtsDigital'].forEach(id => {
                 const input = document.getElementById(`input-${id}`);
                 if (input) input.value = '';
             });
