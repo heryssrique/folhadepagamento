@@ -1867,10 +1867,8 @@ async function processFiles() {
             });
         }
 
-        state.conciliacao.fgts.push({
-            origem: 'FGTS Digital (Governo)',
-            baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0
-        });
+        const fgtsDigitalCsvs = state.files.fgtsDigital && !isVirtual(state.files.fgtsDigital) ? await readFgtsDigital(state.files.fgtsDigital) : null;
+        state.conciliacao.fgts.push(buildGovernoFgts(audit, fgtsDigitalCsvs ? fgtsDigitalCsvs.tiposDeValor : ''));
 
         const ratTxt = `${(aliqRatFap * 100).toFixed(4).replace('.', ',')}% (RAT ${cfg.rat || 2}% × FAP ${cfg.fap || 1})`;
         const pctTxt = v => `${(v * 100).toFixed(2).replace('.', ',')}%`;
@@ -1953,8 +1951,8 @@ async function processFiles() {
             'INSS Segurado': pdfEncargos.inssSegurado
         });
         audit.colaboradores = buildComparacaoColaboradores(audit);
-        if (state.files.fgtsDigital && !isVirtual(state.files.fgtsDigital)) {
-            audit.fgtsDigital = buildComparacaoFgtsDigital(audit, state.files.fgtsDigital.name, await state.files.fgtsDigital.text());
+        if (fgtsDigitalCsvs) {
+            audit.fgtsDigital = buildComparacaoFgtsDigital(audit, state.files.fgtsDigital.name, fgtsDigitalCsvs.trabalhadores);
         }
         audit.divergencias = buildDivergencias(state.conciliacao, audit);
         conciliacaoAudit = audit;
@@ -3012,11 +3010,56 @@ function buildComparacaoColaboradores(audit) {
     return result;
 }
 
+// Retorno do FGTS Digital: o ZIP traz vários CSVs; usamos Trabalhadores (por pessoa) e TiposDeValor (mensal × 13º).
+// Um CSV solto é tratado como o Trabalhadores.
+async function readFgtsDigital(file) {
+    if (!/\.zip$/i.test(file.name)) return { trabalhadores: await file.text(), tiposDeValor: '' };
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const text = suffix => { const f = zip.file(new RegExp(suffix + '\\.csv$', 'i'))[0]; return f ? f.async('string') : ''; };
+    return { trabalhadores: await text('_Trabalhadores'), tiposDeValor: await text('_TiposDeValor') };
+}
+
+function parseFgtsDigitalCsv(text) {
+    return String(text || '').split(/\r?\n/).filter(l => l.trim()).map(l => l.split(';').map(c => c.trim().replace(/^"|"$/g, '')));
+}
+
+// Valores do FGTS Digital vêm como "5.077,81" (Trabalhadores) ou "638328,50" (TiposDeValor).
+function parseFgtsDigitalNum(v) {
+    return parseFloat(String(v || '').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+// Coluna GFD (Governo) da conciliação de FGTS, do "..._TiposDeValor.csv":
+// "12 - FGTS 13o salario" → 13º; tipos rescisórios → rescisório; o resto (11 mensal, 15 aprendiz…) → mensal.
+function buildGovernoFgts(audit, tiposCsv) {
+    const out = { origem: 'FGTS Digital (Governo)', synced: false, baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0 };
+    const lines = parseFgtsDigitalCsv(tiposCsv);
+    if (lines.length === 0) return out;
+    const col = name => lines[0].indexOf(name);
+    const missing = ['Tipo de Valor', 'Base Remuneracao Total', 'FGTS Mensal na Guia', 'FGTS Rescisorio na Guia'].filter(name => col(name) === -1);
+    if (missing.length) {
+        audit.add('FGTS Digital', 'error', `Colunas ausentes no TiposDeValor do FGTS Digital: ${missing.join(', ')}`, 'Coluna GFD (Governo) do FGTS não preenchida');
+        return out;
+    }
+    lines.slice(1).forEach(r => {
+        const tipo = r[col('Tipo de Valor')];
+        const base = parseFgtsDigitalNum(r[col('Base Remuneracao Total')]);
+        const valor = parseFgtsDigitalNum(r[col('FGTS Mensal na Guia')]) + parseFgtsDigitalNum(r[col('FGTS Rescisorio na Guia')]);
+        const [b, v] = /rescis/i.test(tipo) ? ['baseRescisoria', 'valorRescisorio'] : /\b13o\b|13º/i.test(tipo) ? ['base13', 'valor13'] : ['baseMensal', 'valorMensal'];
+        out[b] += base;
+        out[v] += valor;
+        out.total += valor;
+    });
+    out.synced = true;
+    audit.add('FGTS Digital', 'info', 'Coluna GFD (Governo) do FGTS lida do TiposDeValor',
+        `Mensal ${formatCurrency(out.valorMensal)} | 13º ${formatCurrency(out.valor13)} | Rescisório ${formatCurrency(out.valorRescisorio)} | Total ${formatCurrency(out.total)}`);
+    return out;
+}
+
 // Cruza, por nome, o retorno do FGTS Digital ("..._Trabalhadores.csv") com a Planilha de Bases:
 // base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL;
 // valor = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF.
 function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
-    const lines = csvText.split(/\r?\n/).filter(l => l.trim()).map(l => l.split(';').map(c => c.trim().replace(/^"|"$/g, '')));
+    const lines = parseFgtsDigitalCsv(csvText);
     const header = lines[0] || [];
     const col = name => header.indexOf(name);
     const required = ['Nome Trabalhador', 'Base Remuneracao Total', 'Valor FGTS na Guia'];
@@ -3025,7 +3068,7 @@ function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
         audit.add('FGTS Digital', 'error', `Colunas ausentes em ${arquivo}: ${missing.join(', ')}`, 'Comparação FGTS Digital × Planilha não realizada');
         return [];
     }
-    const num = v => parseFloat(String(v || '').replace(/\./g, '').replace(',', '.')) || 0;
+    const num = parseFgtsDigitalNum;
     // FGTS Digital grava nomes sem acento ("PALACIOS") e a Planilha com ("PALÁCIOS").
     const nameKey = nome => auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
     const guia = new Map();
