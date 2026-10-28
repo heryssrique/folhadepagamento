@@ -1724,7 +1724,8 @@ async function processFiles() {
         const ciBlocks = audit.analiticoEmployees.filter(e => e.isCI || planilhaCINames.has(auditNameKey(e.nome)));
         const ciA = ciBlocks.reduce((acc, e) => ({
             base: acc.base + e.baseInss + e.baseInss13, seg: acc.seg + e.inssSegurado,
-            emp: acc.emp + e.inssEmpresa, rat: acc.rat + e.inssRat, ter: acc.ter + e.inssTerceiro
+            // Bloco de pró-labore do RM pode vir sem "INSS Empresa" (Concreta): CPP = base do bloco × alíquota patronal.
+            emp: acc.emp + (e.inssEmpresa || (e.baseInss + e.baseInss13) * aliqPatronal), rat: acc.rat + e.inssRat, ter: acc.ter + e.inssTerceiro
         }), { base: 0, seg: 0, emp: 0, rat: 0, ter: 0 });
         if (ciBlocks.length) {
             audit.add('Analítico', ciA.rat + ciA.ter > 0.005 ? 'warning' : 'info',
