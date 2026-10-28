@@ -13,6 +13,7 @@
   <!-- File Processing Libraries -->
   <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script>
     // Configura o worker do PDF.js
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
@@ -336,7 +337,7 @@
               </div>
               <div>
                 <h3>Retorno FGTS Digital</h3>
-                <p>Arquivo "..._Trabalhadores.csv" extraído do ZIP do FGTS Digital</p>
+                <p>ZIP baixado do FGTS Digital (ou só o "..._Trabalhadores.csv")</p>
               </div>
               <div class="upload-status-icon" id="status-fgtsDigital" style="display:none">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
@@ -345,10 +346,10 @@
             <div class="dropzone" id="drop-fgtsDigital" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'fgtsDigital')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
               <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('fgtsDigital')">clique para selecionar</span></p>
-              <span class="file-hint">.csv</span>
+              <span class="file-hint">.zip, .csv</span>
               <div class="file-preview" id="preview-fgtsDigital"></div>
             </div>
-            <input type="file" id="input-fgtsDigital" accept=".csv" style="display:none" onchange="handleFileSelect(event,'fgtsDigital')" />
+            <input type="file" id="input-fgtsDigital" accept=".zip,.csv" style="display:none" onchange="handleFileSelect(event,'fgtsDigital')" />
           </div>
         </div>
 
@@ -859,6 +860,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=32"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>
