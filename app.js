@@ -1369,7 +1369,9 @@ async function processFiles() {
             prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
-        for (const planilhaFile of state.files.planilha.filter(file => !isVirtual(file))) {
+        // GRRF solta no card de Encargos passa pelo mesmo leitor da planilha (outras guias cairiam no fallback de bases).
+        const encargosXlsx = state.files.encargos && /grrf.*\.xlsx?$/i.test(state.files.encargos.name) ? [state.files.encargos] : [];
+        for (const planilhaFile of [...state.files.planilha, ...encargosXlsx].filter(file => !isVirtual(file))) {
 
             // Executar extrator unificado para validação de layout
             const planSummary = await extractExcelSummary(planilhaFile);
@@ -2052,8 +2054,9 @@ function simulateValidation(id) {
         ];
         const hasGRRF = uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
         const fields = state.layoutResults.grrf.fields;
-        const missing = Object.entries(fields).filter(([name, found]) => !found).map(([name]) => name);
-        
+        // RM só exporta colunas de FGTS com movimento; exigir só os identificadores (o extrator já exige uma coluna de valor).
+        const missing = ['NOME', 'CHAPA', 'CODTIPO'].filter(name => !fields[name]);
+
         if (!hasGRRF) {
             v.status = 'warning';
             v.desc = '<strong>Motivo:</strong> Arquivo de GRRF não identificado na lista de uploads.';
