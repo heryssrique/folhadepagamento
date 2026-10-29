@@ -1136,7 +1136,7 @@ async function processFiles() {
     Object.keys(state.layoutResults.grrf.fields).forEach(k => state.layoutResults.grrf.fields[k] = false);
 
     try {
-        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0;
+        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0, pdfSalarioFamilia = 0;
         let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
         // null = rótulo não encontrado no relatório (0 é um valor lido válido, ex.: CPP zerada no RM).
         let pdfEncargos = { inssEmpresa: null, inssSat: null, inssTerceiros: null, inssSatAjustado: null, inssSegurado: null, fgtsDep: 0, fgts13Dep: 0 };
@@ -1194,6 +1194,10 @@ async function processFiles() {
                             state.layoutResults.analitico.fields['PRO LABORE'] = true;
                         }
                     }
+
+                    // 1014 SALARIO FAMILIA  3  3  150,84 — só a linha de total (N.F. + Ref); por funcionário vem só a Ref.
+                    const mSalFam = clean.match(/1014\s+SALARIO\s+FAMILIA\s+\d+\s+[\d,.]+\s+([\d.]+,\d{2})/i);
+                    if (mSalFam) pdfSalarioFamilia = Math.max(pdfSalarioFamilia, parseNum(mSalFam[1]));
 
                     // 4016 LIQUIDO FOLHA PAGAMENTO ... 589.840,80
                     if (/4016\s+LIQUIDO\s+FOLHA\s+PAGAMENTO/i.test(clean)) {
@@ -1778,11 +1782,11 @@ async function processFiles() {
                 ratfap: ratfap,
                 terceiros: terceiros,
                 subtotal: segurados + patronal + ratfap + terceiros,
-                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—". Guia sem salário-família fica "—".
+                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—". Guia fica "—".
                 baseCI: ciBlocks.length ? ciA.base + (pdfBases.inssAuton || 0) : null,
                 seguradosCI: ciBlocks.length ? ciA.seg : null,
                 patronalCI: ciBlocks.length ? ciA.emp + patronalCIAnalitico : null,
-                salarioFamilia: null, total: null
+                salarioFamilia: pdfSalarioFamilia, total: null
             }
         ];
 
@@ -1885,6 +1889,7 @@ async function processFiles() {
         audit.formulas.push(
             { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}` + (ciA.base ? ` − contribuintes individuais ${formatCurrency(ciA.base)}` : ''), valor: inssBaseEncargos },
             { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
+            { fonte: 'Analítico', metrica: 'INSS · Salário-Família', formula: '"1014 SALARIO FAMILIA" do total geral (0 quando a rubrica não aparece)', valor: pdfSalarioFamilia },
             { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
                 ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
