@@ -1198,7 +1198,7 @@ async function processFiles() {
 
     try {
         let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0, pdfSalarioFamilia = 0;
-        let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
+        let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, inssProLabore: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
         // null = rótulo não encontrado no relatório (0 é um valor lido válido, ex.: CPP zerada no RM).
         let pdfEncargos = { inssEmpresa: null, inssSat: null, inssTerceiros: null, inssSatAjustado: null, inssSegurado: null, fgtsDep: 0, fgts13Dep: 0 };
         const audit = createConciliacaoAudit();
@@ -1327,6 +1327,10 @@ async function processFiles() {
                     // A CPP ("INSS Empresa") do RM inclui 20% sobre a base de autônomos.
                     if (take('baseAuton', 'Base INSS Autônomos', 'max')) {
                         pdfBases.inssAuton = Math.max(pdfBases.inssAuton || 0, rm.baseAuton);
+                    }
+                    // ...e 20% sobre "Base INSS Pro-Labore", mesmo quando o pró-labore também está no Envelope (Concreta).
+                    if (take('baseProLabore', 'Base INSS Pro-Labore', 'max')) {
+                        pdfBases.inssProLabore = Math.max(pdfBases.inssProLabore || 0, rm.baseProLabore);
                     }
                     // Encargos: vale a última ocorrência (total geral no fim do relatório). 0 lido ≠ não encontrado.
                     if (take('inssEmpresa', 'INSS Empresa', 'last')) pdfEncargos.inssEmpresa = rm.inssEmpresa;
@@ -1803,7 +1807,9 @@ async function processFiles() {
         const ciA = ciBlocks.reduce((acc, e) => ({
             base: acc.base + e.baseInss + e.baseInss13, seg: acc.seg + e.inssSegurado,
             // Bloco de pró-labore do RM pode vir sem "INSS Empresa" (Concreta): CPP = base do bloco × alíquota patronal.
-            emp: acc.emp + (e.inssEmpresa || (e.baseInss + e.baseInss13) * aliqPatronal), rat: acc.rat + e.inssRat, ter: acc.ter + e.inssTerceiro
+            // Idem "INSS Terceiro": o RM cobra Terceiros sobre o pró-labore do Envelope (RAT não).
+            emp: acc.emp + (e.inssEmpresa || (e.baseInss + e.baseInss13) * aliqPatronal), rat: acc.rat + e.inssRat,
+            ter: acc.ter + (e.inssTerceiro || (e.baseInss + e.baseInss13) * aliqTerceiros)
         }), { base: 0, seg: 0, emp: 0, rat: 0, ter: 0 });
         if (ciBlocks.length) {
             audit.add('Analítico', ciA.rat + ciA.ter > 0.005 ? 'warning' : 'info',
@@ -1813,9 +1819,18 @@ async function processFiles() {
         }
 
         const inssBaseEncargos = inssBaseTotalAnalitico - ciA.base;
-        // INSS Empresa do RM inclui 20% sobre autônomos; separa a parte de empregados (código 1138-01).
+        // INSS Empresa do RM inclui 20% sobre autônomos e sobre "Base INSS Pro-Labore"; separa a parte de empregados (código 1138-01).
+        const cppProLaboreRM = (pdfBases.inssProLabore || 0) * aliqPatronal;
         const patronalCIAnalitico = (pdfBases.inssAuton || 0) * aliqPatronal;
-        const patronal  = pdfEncargos.inssEmpresa !== null ? pdfEncargos.inssEmpresa - patronalCIAnalitico - ciA.emp : (inssBaseEncargos * aliqPatronal);
+        const patronal  = pdfEncargos.inssEmpresa !== null ? pdfEncargos.inssEmpresa - patronalCIAnalitico - cppProLaboreRM - ciA.emp : (inssBaseEncargos * aliqPatronal);
+        // Pró-labore no Envelope e em "Base INSS Pro-Labore" ao mesmo tempo: o RM cobrou a CPP do sócio duas vezes; o CI conta uma.
+        const baseProLaboreCI = Math.max(ciA.base, pdfBases.inssProLabore || 0);
+        const cppProLaboreCI = Math.max(ciA.emp, cppProLaboreRM);
+        if (ciA.base > 0.005 && cppProLaboreRM > 0.005) {
+            audit.add('Analítico', 'warning', 'CPP do pró-labore cobrada em duplicidade no "INSS Empresa" do RM',
+                `O pró-labore está em "Base INSS - Envelope" (${formatCurrency(ciA.base)}) e em "Base INSS Pro-Labore" (${formatCurrency(pdfBases.inssProLabore)}); ` +
+                `o RM somou ${formatCurrency(ciA.emp + cppProLaboreRM)} de CPP. O 1138-01 desconta as duas parcelas e o 1138-04 considera uma.`);
+        }
         const ratLido = pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat;
         const ratfap    = ratLido !== null ? ratLido - ciA.rat : (inssBaseEncargos * aliqRatFap);
         const terceiros = pdfEncargos.inssTerceiros !== null ? pdfEncargos.inssTerceiros - ciA.ter : (inssBaseEncargos * aliqTerceiros);
@@ -1845,11 +1860,11 @@ async function processFiles() {
                 terceiros: terceiros,
                 subtotal: segurados + patronal + ratfap + terceiros,
                 // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—", e a guia também (faltaria o CI).
-                baseCI: ciBlocks.length ? ciA.base + (pdfBases.inssAuton || 0) : null,
+                baseCI: ciBlocks.length ? baseProLaboreCI + (pdfBases.inssAuton || 0) : null,
                 seguradosCI: ciBlocks.length ? ciA.seg : null,
-                patronalCI: ciBlocks.length ? ciA.emp + patronalCIAnalitico : null,
+                patronalCI: ciBlocks.length ? cppProLaboreCI + patronalCIAnalitico : null,
                 salarioFamilia: pdfSalarioFamilia,
-                total: ciBlocks.length ? segurados + patronal + ratfap + terceiros + ciA.seg + ciA.emp + patronalCIAnalitico - pdfSalarioFamilia : null
+                total: ciBlocks.length ? segurados + patronal + ratfap + terceiros + ciA.seg + cppProLaboreCI + patronalCIAnalitico - pdfSalarioFamilia : null
             }
         ];
 
@@ -1969,12 +1984,12 @@ async function processFiles() {
             { fonte: 'Analítico', metrica: 'INSS · Salário-Família', formula: '"1014 SALARIO FAMILIA" do total geral (0 quando a rubrica não aparece)', valor: pdfSalarioFamilia },
             { fonte: 'Analítico', metrica: 'INSS · Total Guia INSS', formula: ciBlocks.length ? 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família' : 'Sem blocos de pró-labore no Analítico: total não calculado', valor: state.conciliacao.inss[0].total },
             { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
-                ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
+                ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − (autônomos ${formatCurrency(pdfBases.inssAuton || 0)} + "Base INSS Pro-Labore" ${formatCurrency(pdfBases.inssProLabore || 0)}) × ${pctTxt(aliqPatronal)}` + (ciA.emp ? ` − CPP dos blocos de pró-labore ${formatCurrency(ciA.emp)}` : '')
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
             { fonte: 'Analítico', metrica: 'INSS · RAT Ajustado (1646)', formula: origemEncargo(pdfEncargos.inssSatAjustado ?? pdfEncargos.inssSat, pdfEncargos.inssSatAjustado !== null ? 'INSS SAT Ajustado' : 'INSS SAT', ratTxt), valor: ratfap },
             { fonte: 'Analítico', metrica: 'INSS · Terceiros', formula: origemEncargo(pdfEncargos.inssTerceiros, 'INSS Terceiro', pctTxt(aliqTerceiros)), valor: terceiros },
             ciBlocks.length
-                ? { fonte: 'Analítico', metrica: 'INSS · Base Contribuintes Individuais', formula: `Blocos de pró-labore (${ciBlocks.map(e => e.nome).join(', ')}) + "Base INSS Auton." ${formatCurrency(pdfBases.inssAuton || 0)}; encargos desses blocos descontados dos empregados`, valor: ciA.base + (pdfBases.inssAuton || 0) }
+                ? { fonte: 'Analítico', metrica: 'INSS · Base Contribuintes Individuais', formula: `Maior entre blocos de pró-labore (${ciBlocks.map(e => e.nome).join(', ')}) e "Base INSS Pro-Labore" + "Base INSS Auton." ${formatCurrency(pdfBases.inssAuton || 0)}; encargos desses blocos descontados dos empregados`, valor: baseProLaboreCI + (pdfBases.inssAuton || 0) }
                 : { fonte: 'Analítico', metrica: 'INSS · Contribuintes Individuais', formula: 'Não se aplica: o Analítico do RM não traz o pró-labore do sócio', valor: null },
             { fonte: 'Analítico', metrica: 'FGTS · Base Mensal', formula: 'Maior "Base FGTS" do relatório', valor: fgtsMensalBase },
             { fonte: 'Analítico', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(base8Mensal)} × 8%) + (${formatCurrency(base2Mensal)} aprendiz × 2%)`, valor: fgtsValor },
@@ -2822,6 +2837,7 @@ const RM_FIELDS = [
     { id: 'baseFgts2', labels: ['Base FGTS Menor Apr.(SEFIP)', 'Base FGTS Menor Aprendiz', 'Base FGTS 2%'] },
     { id: 'baseIrrf', labels: ['Base IRRF'] },
     { id: 'baseAuton', labels: ['Base INSS Auton.', 'Base INSS Autônomo'] },
+    { id: 'baseProLabore', labels: ['Base INSS Pro-Labore'] },
     { id: 'inssEmpresa', labels: ['INSS Empresa'] },
     { id: 'inssSatAjustado', labels: ['INSS SAT Ajustado'] },
     { id: 'inssSat', labels: ['INSS SAT'] },
