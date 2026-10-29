@@ -1,72 +1,36 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
 
+const { connectToDatabase } = require('./config/db');
+
 const app = express();
-app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// MongoDB Schema
-const StateSchema = new mongoose.Schema({
-    userId: { type: String, default: 'default' },
-    data: Object
-}, { timestamps: true });
-
-const State = mongoose.models.State || mongoose.model('State', StateSchema);
-
-// Connection logic for Serverless
-let cachedDb = null;
-async function connectToDatabase() {
-    if (cachedDb) return cachedDb;
-    const MONGODB_URI = process.env.MONGODB_URI;
-    if (!MONGODB_URI) throw new Error('MONGODB_URI is not defined');
-    
-    cachedDb = await mongoose.connect(MONGODB_URI);
-    return cachedDb;
-}
-
-// API Routes
-app.get('/api/state', async (req, res) => {
-    try {
-        await connectToDatabase();
-        const state = await State.findOne({ userId: 'default' });
-        if (!state) return res.json(null);
-        res.json(state.data);
-    } catch (err) {
-        console.error('Error fetching state:', err);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-app.post('/api/state', async (req, res) => {
-    try {
-        await connectToDatabase();
-        const state = await State.findOneAndUpdate(
-            { userId: 'default' },
-            { data: req.body },
-            { upsert: true, new: true }
-        );
-        res.json(state.data);
-    } catch (err) {
-        console.error('Error saving state:', err);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
-});
-
-app.delete('/api/state', async (req, res) => {
-    try {
-        await connectToDatabase();
-        await State.deleteOne({ userId: 'default' });
-        res.json({ message: 'State reset successfully' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Root route for API health check
-app.get('/api', (req, res) => {
+// Health check
+app.get('/api/health', (req, res) => {
     res.json({ status: 'FolhaPay API is running' });
 });
+
+// Na Vercel a função pode acordar sem conexão: toda rota espera o MongoDB antes de consultar.
+app.use('/api', async (req, res, next) => {
+    try {
+        await connectToDatabase();
+        next();
+    } catch (err) {
+        console.error('MongoDB Connection Error:', err);
+        res.status(503).json({ error: 'Banco de dados indisponível' });
+    }
+});
+
+// Log de Conciliação: antes do express.json global, porque usa limite maior (50 MB).
+app.use('/api/conciliacao-log', require('./routes/conciliacaoLog'));
+app.use(express.json({ limit: '10mb' }));
+
+// --- Rotas de Autenticação ---
+app.use('/api/auth', require('./routes/auth'));
+
+// --- Rotas de Estado da Folha de Pagamento (protegidas) ---
+app.use('/api/state', require('./routes/state'));
 
 module.exports = app;

@@ -20,6 +20,83 @@
   </script>
 </head>
 <body>
+  <!-- Login Overlay (aparece quando não autenticado) -->
+  <div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="login-logo">
+          <svg viewBox="0 0 32 32" fill="none">
+            <rect width="32" height="32" rx="8" fill="url(#login-grad)"/>
+            <path d="M8 10h16M8 16h10M8 22h13" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="23" cy="22" r="4" fill="#38bdf8" stroke="#fff" stroke-width="1.5"/>
+            <path d="M21.5 22l1 1 2-2" stroke="#fff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="login-grad" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0%" stop-color="#6366f1"/>
+                <stop offset="100%" stop-color="#8b5cf6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>FolhaPay</span>
+        </div>
+        <h2>Entrar no Sistema</h2>
+        <p>Acesso restrito - apenas usuários autorizados podem visualizar dados de folha.</p>
+      </div>
+
+      <div class="login-body">
+        <div class="login-mode-tabs">
+          <button class="tab-btn active" data-tab="login">Entrar</button>
+          <button class="tab-btn" data-tab="register">Criar Conta</button>
+        </div>
+
+        <!-- Formulário de Login -->
+        <form id="login-form" class="login-form active">
+          <div class="form-group">
+            <label for="login-email">E-mail</label>
+            <input type="email" id="login-email" placeholder="usuario@empresa.com" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="login-password">Senha</label>
+            <input type="password" id="login-password" placeholder="••••••••" required minlength="8" autocomplete="current-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">Entrar</button>
+          <div class="form-footer">
+            <span class="error-text" id="login-error" style="display:none"></span>
+          </div>
+        </form>
+
+        <!-- Formulário de Cadastro -->
+        <form id="register-form" class="login-form" style="display:none">
+          <div class="form-group">
+            <label for="reg-name">Nome Completo</label>
+            <input type="text" id="reg-name" placeholder="Fulano da Silva" required autocomplete="name">
+          </div>
+          <div class="form-group">
+            <label for="reg-email">E-mail</label>
+            <input type="email" id="reg-email" placeholder="usuario@empresa.com" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="reg-password">Senha (mín. 8 caracteres)</label>
+            <input type="password" id="reg-password" placeholder="••••••••" required minlength="8" autocomplete="new-password">
+          </div>
+          <div class="form-group">
+            <label for="reg-confirm">Confirmar Senha</label>
+            <input type="password" id="reg-confirm" placeholder="••••••••" required minlength="8" autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">Criar Conta</button>
+          <div class="form-footer">
+            <span class="error-text" id="register-error" style="display:none"></span>
+          </div>
+        </form>
+
+        <div class="login-footer">
+          <p>Não tem uma conta? <button type="button" id="switch-to-register">Cadastre-se</button></p>
+          <p>Já tem uma conta? <button type="button" id="switch-to-login">Faça login</button></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
@@ -84,6 +161,14 @@
 
   <!-- Main Content -->
   <main class="main-content">
+    <!-- Overlay de Loading -->
+    <div id="loading-overlay" class="loading-overlay" style="display:none">
+      <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Área Principal (aparece apenas quando autenticado) -->
+    <div id="main-area" class="main-area">
+      <!-- Conteúdo do Dashboard / Views -->
     <!-- Top Bar -->
     <header class="topbar">
       <div class="topbar-left">
@@ -129,7 +214,14 @@
           <button class="btn-icon" title="Notificações">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
           </button>
-          <div class="user-avatar">RH</div>
+          <div class="user-avatar" id="authUserAvatar">U</div>
+        </div>
+        <div class="topbar-user" style="display:flex;align-items:center;gap:6px;margin-left:8px">
+          <span id="authUserName" style="font-size:0.75rem;font-weight:500;color:var(--text-primary)">Usuário</span>
+          <span id="authUserRole" style="font-size:0.65rem;color:var(--text-muted)">Usuário</span>
+          <button class="btn-icon logout-btn" id="btnLogout" title="Sair do sistema" style="padding:2px;border-radius:4px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 18l6-6-6-6M15 6l6 6-6 6"/></svg>
+          </button>
         </div>
     </header>
 
@@ -756,6 +848,28 @@
         </div>
 
         <div class="config-grid">
+          <!-- Aprovação de cadastros (só admin; exibido por auth.js) -->
+          <div class="card" id="adminUsersCard" style="grid-column: 1 / -1; margin-bottom: 24px; display:none">
+            <div class="card-header">
+              <h3 class="card-title">👥 Usuários <span id="adminUsersPending" style="font-size:0.75rem;color:var(--accent-orange)"></span></h3>
+              <button class="btn btn-sm btn-secondary" onclick="loadAdminUsers()">Atualizar</button>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>E-mail</th>
+                    <th>Perfil</th>
+                    <th>Cadastro</th>
+                    <th style="text-align:center">Status</th>
+                    <th style="text-align:right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersList"></tbody>
+              </table>
+            </div>
+          </div>
           <!-- Gerenciamento de Empresas -->
           <div class="card" style="grid-column: 1 / -1; margin-bottom: 24px;">
             <div class="card-header">
@@ -907,5 +1021,6 @@
   </div>
 
   <script src="app.js?v=41"></script>
+<script src="auth.js?v=2"></script>
 </body>
 </html>
