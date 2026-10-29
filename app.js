@@ -1377,7 +1377,7 @@ async function processFiles() {
         // prolabore/seguradosCI = contribuintes individuais (CODTIPO D); irrf* = IRRF retido; difSal = BASEFGTSDIFSAL.
         let govData = null;
         let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false,
-            prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
+            prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, hasSalarioFamilia: false, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
         // Card GRRF (slot "encargos") passa pelo mesmo leitor da planilha, sem o fallback de bases (abaixo).
@@ -1611,6 +1611,7 @@ async function processFiles() {
                     const val = key => (idx[key] !== -1 ? parseV(row[idx[key]]) : 0);
                     excelBases.difSal += val('baseDifSal');
                     excelBases.salarioFamilia += val('salarioFamilia');
+                    if (idx.salarioFamilia !== -1) excelBases.hasSalarioFamilia = true;
                     excelBases.irrfMensal += val('irrfValor');
                     excelBases.irrf13 += val('irrf13Valor');
                     excelBases.irrfFerias += val('irrfFeriasValor');
@@ -1675,6 +1676,7 @@ async function processFiles() {
                             if (found === null) found = row.slice(c + 1).map(toNum).find(v => v !== null) ?? null;
                             if (found !== null) {
                                 excelBases.salarioFamilia += found;
+                                excelBases.hasSalarioFamilia = true;
                                 audit.add('Planilha', 'info', `Salário-família lido do bloco de resumo de ${planilhaFile.name}`, `${formatCurrency(found)} (célula ${XLSX.utils.encode_col(c)}${r + 1} e abaixo)`);
                                 break outer;
                             }
@@ -1815,7 +1817,8 @@ async function processFiles() {
                 baseCI: baseCIExcel,
                 seguradosCI: excelBases.seguradosCI,
                 patronalCI: baseCIExcel * aliqPatronal,
-                salarioFamilia: excelBases.salarioFamilia,
+                // Planilha sem coluna/resumo de salário-família: "—" (fora da comparação), não R$ 0,00.
+                salarioFamilia: excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : null,
                 total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - excelBases.salarioFamilia
             });
         }
