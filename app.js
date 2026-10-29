@@ -368,14 +368,28 @@ async function resetSistema() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+// --- Autenticação: bootstrap depois do login ---
+async function bootstrapAuthenticatedApp() {
     // Carrega dados persistidos
     await loadState();
-    
+
     // Inicializa a interface
     renderDashboard();
     renderFechamentoSteps();
     updateDashboard();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Inicializa autenticação
+    const authInitialized = await initAuth();
+    if (!authInitialized) {
+        // Não carregar UI se não autenticado - login já foi mostrado
+        debugLog('app.initialized', { outcome: 'unauthenticated' });
+        return;
+    }
+
+    // Inicializa a interface (depois de autenticado)
+    await bootstrapAuthenticatedApp();
 
     // Listener global para navegação
     document.addEventListener('click', (e) => {
@@ -386,7 +400,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             showView(viewId, navItem);
         }
     });
-    
+
+    // Configura formulários de autenticação
+    setupAuthForms();
+
     debugLog('app.initialized', { outcome: 'ready' });
 });
 
@@ -2061,6 +2078,7 @@ async function processFiles() {
         }
         audit.divergencias = buildDivergencias(state.conciliacao, audit);
         conciliacaoAudit = audit;
+        enviarConciliacaoLog(audit);
 
         debugLog('reconciliation.assigned', {
             inss: excelBases.inss,
@@ -2972,9 +2990,34 @@ function buildGovernoINSS(gov, aliqPatronal) {
 }
 
 // --- Log de Conciliação (auditoria ponto a ponto) ---
-// Mantido apenas em memória: contém nomes e valores por colaborador, por isso
-// não entra em saveState() nem é enviado à API. Recriado a cada processamento.
+// Contém nomes e valores por colaborador: não entra em saveState()/localStorage; vai inteiro para
+// a rota autenticada /api/conciliacao-log (histórico: um registro por processamento). Recriado a cada processamento.
 let conciliacaoAudit = null;
+
+async function enviarConciliacaoLog(audit) {
+    const emp = state.empresas.find(e => e.active) || {};
+    const json = JSON.stringify({
+        empresa: emp.nome || state.config?.empresa || '',
+        cnpj: emp.cnpj || state.config?.cnpj || '',
+        competencia: state.competencia,
+        geradoEm: audit.createdAt,
+        data: audit
+    });
+    try {
+        // gzip: o log de uma folha grande passa do limite de 4,5 MB por requisição da Vercel.
+        const gzip = typeof CompressionStream === 'function';
+        const body = gzip ? await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'))).blob() : json;
+        const res = await fetch(`${API_URL}/conciliacao-log`, {
+            method: 'POST',
+            headers: gzip ? { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' } : { 'Content-Type': 'application/json' },
+            body
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+        console.warn('Log de conciliação não enviado ao banco:', e.message);
+        showToast('Log de conciliação não foi salvo no banco (servidor indisponível ou sessão expirada).', 'warning');
+    }
+}
 
 const AUDIT_TOLERANCE = 0.05;
 
