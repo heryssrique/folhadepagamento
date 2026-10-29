@@ -444,7 +444,7 @@ function routeFilesAutomatically(fileList) {
     const files = Array.from(fileList);
     if (!files.length) return;
 
-    const routed = { pdf: [], planilha: null, encargos: null };
+    const routed = { pdf: [], planilha: null, encargos: null, esocial: null, dctf: null };
     const extensions = files.map(file => String(file.name || '').split('.').pop().toLowerCase());
 
     files.forEach(file => {
@@ -454,6 +454,13 @@ function routeFilesAutomatically(fileList) {
         // Planilha de Bases/Confronto: deve alimentar a conciliação, não o analítico
         if (/base|bases|confronto/i.test(name) && (ext === 'xlsx' || ext === 'xls' || ext === 'csv')) {
             routed.planilha = file;
+        }
+        // eSocial (resumo S-5011) e DCTFWeb em Excel têm cards próprios
+        else if (/esocial/i.test(name) && (ext === 'xlsx' || ext === 'xls')) {
+            routed.esocial = file;
+        }
+        else if (/dctf/i.test(name) && (ext === 'xlsx' || ext === 'xls')) {
+            routed.dctf = file;
         }
         // Encargos: GFD, FGTS Digital, guias
         else if (/fgts|gfd|guia|encargo|dctf|esocial/i.test(name) && (ext === 'xlsx' || ext === 'pdf')) {
@@ -489,12 +496,16 @@ function routeFilesAutomatically(fileList) {
         state.files.planilha = [...state.files.planilha.filter(file => !isVirtual(file)), routed.planilha];
     }
     if (routed.encargos) state.files.encargos = routed.encargos;
+    if (routed.esocial) state.files.esocial = routed.esocial;
+    if (routed.dctf) state.files.dctf = routed.dctf;
 
     // Toast descritivo
     const parts = [];
     if (routed.pdf.length)  parts.push(`${routed.pdf.length} Analítico(s)`);
     if (routed.planilha)    parts.push('1 Planilha');
-    if (routed.encargos)    parts.push('1 Encargos');
+    if (routed.encargos)    parts.push('1 GRRF');
+    if (routed.esocial)     parts.push('1 eSocial');
+    if (routed.dctf)        parts.push('1 DCTFWeb');
     showToast(`✅ ${parts.join(', ')} classificado(s) automaticamente`, 'success');
 
     renderFilePreviews();
@@ -532,7 +543,7 @@ function processUploadedFiles(fileList, type) {
 function renderFilePreviews() {
     // Update individual dropzone previews
     // Slots com arquivo único
-    ['encargos', 'fgtsDigital'].forEach(type => {
+    ['encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(type => {
         const file = state.files[type];
         const previewEl = document.getElementById(`preview-${type}`);
         const statusEl  = document.getElementById(`status-${type}`);
@@ -590,6 +601,8 @@ function renderFilePreviews() {
     if (state.files.ponto) allFileItems.push({ type: 'Ponto', file: state.files.ponto, key: 'ponto' });
     if (state.files.encargos) allFileItems.push({ type: 'GRRF', file: state.files.encargos, key: 'encargos' });
     if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
+    if (state.files.esocial) allFileItems.push({ type: 'eSocial', file: state.files.esocial, key: 'esocial' });
+    if (state.files.dctf) allFileItems.push({ type: 'DCTFWeb', file: state.files.dctf, key: 'dctf' });
 
     if (allFileItems.length === 0) {
         html = `
@@ -1376,6 +1389,8 @@ async function processFiles() {
         // inss13/inssAutonomo/segurados alimentam os encargos; hasSegurados indica se a Planilha traz o INSS descontado.
         // prolabore/seguradosCI = contribuintes individuais (CODTIPO D); irrf* = IRRF retido; difSal = BASEFGTSDIFSAL.
         let govData = null;
+        const govResumo = gov => [gov.esocial && `eSocial (aba "${gov.esocial.aba}"): base ${formatCurrency(gov.esocial.base || 0)}, ${Object.keys(gov.esocial.codes).length} códigos de receita`,
+            gov.dctf && `DCTFWeb (aba "${gov.dctf.aba}"): total apurado ${formatCurrency(gov.dctf.totalApurado || 0)}, IRRF ${formatCurrency(gov.dctf.irrf || 0)}`].filter(Boolean).join(' | ');
         let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false,
             prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, hasSalarioFamilia: false, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
@@ -1429,10 +1444,7 @@ async function processFiles() {
             const gov = extractGovernoSummary(workbook);
             if (gov && !govData) {
                 govData = gov;
-                audit.add('Governo', 'info', `Valores do governo lidos de ${planilhaFile.name}`,
-                    [gov.esocial && `eSocial (aba "${gov.esocial.aba}"): base ${formatCurrency(gov.esocial.base || 0)}, ${Object.keys(gov.esocial.codes).length} códigos de receita`,
-                     gov.dctf && `DCTFWeb (aba "${gov.dctf.aba}"): total apurado ${formatCurrency(gov.dctf.totalApurado || 0)}, IRRF ${formatCurrency(gov.dctf.irrf || 0)}`]
-                        .filter(Boolean).join(' | '));
+                audit.add('Governo', 'info', `Valores do governo lidos de ${planilhaFile.name}`, govResumo(gov));
             }
             audit.add('Planilha', hasBasesTable ? 'info' : 'warning', `Lendo ${planilhaFile.name}`,
                 hasBasesTable
@@ -1821,6 +1833,18 @@ async function processFiles() {
                 salarioFamilia: excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : null,
                 total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - excelBases.salarioFamilia
             });
+        }
+
+        // Cards eSocial e DCTFWeb: têm prioridade sobre abas coladas na Planilha; um arquivo completa o outro.
+        for (const govFile of [state.files.esocial, state.files.dctf].filter(f => f && !isVirtual(f))) {
+            const gov = extractGovernoSummary(XLSX.read(await govFile.arrayBuffer()));
+            if (!gov) {
+                audit.add('Governo', 'error', `${govFile.name} não reconhecido como eSocial nem DCTFWeb`,
+                    'eSocial: resumo com "11 - Base de cálculo da contribuição previdenciária" e códigos de receita; DCTFWeb: "Débitos apurados" / "Total Apurado Empresa"');
+                continue;
+            }
+            govData = { esocial: gov.esocial || (govData && govData.esocial), dctf: gov.dctf || (govData && govData.dctf) };
+            audit.add('Governo', 'info', `Valores do governo lidos de ${govFile.name}`, govResumo(gov));
         }
 
         state.conciliacao.inss.push(buildGovernoINSS(govData, aliqPatronal));
@@ -4016,7 +4040,7 @@ function excluirDadosCompetencia() {
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos
-            ['planilha', 'pdf', 'encargos', 'fgtsDigital'].forEach(id => {
+            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(id => {
                 const input = document.getElementById(`input-${id}`);
                 if (input) input.value = '';
             });

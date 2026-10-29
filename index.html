@@ -351,6 +351,52 @@
             </div>
             <input type="file" id="input-fgtsDigital" accept=".zip,.csv" style="display:none" onchange="handleFileSelect(event,'fgtsDigital')" />
           </div>
+
+          <!-- eSocial -->
+          <div class="upload-card" id="uploadCard-esocial">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-purple">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              </div>
+              <div>
+                <h3>eSocial</h3>
+                <p>Resumo da folha (S-5011): base de cálculo e códigos de receita</p>
+              </div>
+              <div class="upload-status-icon" id="status-esocial" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-esocial" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'esocial')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('esocial')">clique para selecionar</span></p>
+              <span class="file-hint">.xlsx</span>
+              <div class="file-preview" id="preview-esocial"></div>
+            </div>
+            <input type="file" id="input-esocial" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'esocial')" />
+          </div>
+
+          <!-- DCTFWeb -->
+          <div class="upload-card" id="uploadCard-dctf">
+            <div class="upload-card-header">
+              <div class="upload-type-icon icon-purple">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              </div>
+              <div>
+                <h3>DCTFWeb</h3>
+                <p>Débitos apurados por código de receita e IRRF</p>
+              </div>
+              <div class="upload-status-icon" id="status-dctf" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </div>
+            <div class="dropzone" id="drop-dctf" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'dctf')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('dctf')">clique para selecionar</span></p>
+              <span class="file-hint">.xlsx</span>
+              <div class="file-preview" id="preview-dctf"></div>
+            </div>
+            <input type="file" id="input-dctf" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'dctf')" />
+          </div>
         </div>
 
         <div class="card" style="margin-top:24px">
@@ -860,6 +906,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=37"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>
