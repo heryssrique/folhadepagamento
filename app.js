@@ -1796,11 +1796,12 @@ async function processFiles() {
                 ratfap: ratfap,
                 terceiros: terceiros,
                 subtotal: segurados + patronal + ratfap + terceiros,
-                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—". Guia fica "—".
+                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—", e a guia também (faltaria o CI).
                 baseCI: ciBlocks.length ? ciA.base + (pdfBases.inssAuton || 0) : null,
                 seguradosCI: ciBlocks.length ? ciA.seg : null,
                 patronalCI: ciBlocks.length ? ciA.emp + patronalCIAnalitico : null,
-                salarioFamilia: pdfSalarioFamilia, total: null
+                salarioFamilia: pdfSalarioFamilia,
+                total: ciBlocks.length ? segurados + patronal + ratfap + terceiros + ciA.seg + ciA.emp + patronalCIAnalitico - pdfSalarioFamilia : null
             }
         ];
 
@@ -1831,7 +1832,8 @@ async function processFiles() {
                 patronalCI: baseCIExcel * aliqPatronal,
                 // Planilha sem coluna/resumo de salário-família: "—" (fora da comparação), não R$ 0,00.
                 salarioFamilia: excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : null,
-                total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - excelBases.salarioFamilia
+                // Sem salário-família na Planilha, a guia desconta o do Analítico (validado contra o eSocial).
+                total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - (excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : pdfSalarioFamilia)
             });
         }
 
@@ -1917,6 +1919,7 @@ async function processFiles() {
             { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}` + (ciA.base ? ` − contribuintes individuais ${formatCurrency(ciA.base)}` : ''), valor: inssBaseEncargos },
             { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
             { fonte: 'Analítico', metrica: 'INSS · Salário-Família', formula: '"1014 SALARIO FAMILIA" do total geral (0 quando a rubrica não aparece)', valor: pdfSalarioFamilia },
+            { fonte: 'Analítico', metrica: 'INSS · Total Guia INSS', formula: ciBlocks.length ? 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família' : 'Sem blocos de pró-labore no Analítico: total não calculado', valor: state.conciliacao.inss[0].total },
             { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
                 ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − autônomos ${formatCurrency(pdfBases.inssAuton || 0)} × ${pctTxt(aliqPatronal)}`
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
@@ -1946,7 +1949,7 @@ async function processFiles() {
                 { fonte: 'Planilha', metrica: 'INSS · Base Contribuintes Individuais', formula: `Pró-labore (CODTIPO D: maior entre BASEINSS e BASEIRRF) ${formatCurrency(excelBases.prolabore)} + Σ BASE_INSS_AUTONOMO ${formatCurrency(excelBases.inssAutonomo)}`, valor: baseCI },
                 { fonte: 'Planilha', metrica: 'INSS · Segurados CI (1099)', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO = D', valor: excelBases.seguradosCI },
                 { fonte: 'Planilha', metrica: 'INSS · Patronal CI (1138-04)', formula: `Base CI × ${pctTxt(aliqPatronal)}`, valor: baseCI * aliqPatronal },
-                { fonte: 'Planilha', metrica: 'INSS · Total Guia INSS', formula: 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família', valor: (state.conciliacao.inss.find(x => /Confronto/.test(x.origem)) || {}).total ?? null },
+                { fonte: 'Planilha', metrica: 'INSS · Total Guia INSS', formula: `Subtotal empregados + Segurados CI + Patronal CI − Salário-família ${excelBases.hasSalarioFamilia ? 'da Planilha' : `do Analítico ${formatCurrency(pdfSalarioFamilia)} (Planilha sem salário-família)`}`, valor: (state.conciliacao.inss.find(x => /Confronto/.test(x.origem)) || {}).total ?? null },
                 { fonte: 'Planilha', metrica: 'IRRF · Total IRRF', formula: `Σ IRRF ${formatCurrency(excelBases.irrfMensal)} + Σ IRRF13 ${formatCurrency(excelBases.irrf13)} + Σ IRRFFERIAS ${formatCurrency(excelBases.irrfFerias)}`, valor: excelBases.irrfMensal + excelBases.irrf13 + excelBases.irrfFerias },
                 { fonte: 'Planilha', metrica: 'FGTS · Base Mensal', formula: 'Σ (BASEFGTS + BASEFGTSAVPREVIO)', valor: excelBases.fgts },
                 { fonte: 'Planilha', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(excelBases.fgts - base2Excel)} × 8%) + (${formatCurrency(base2Excel)} CODTIPO Z × 2%)`, valor: (excelBases.fgts - base2Excel) * 0.08 + base2Excel * 0.02 },
