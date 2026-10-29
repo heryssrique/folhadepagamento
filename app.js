@@ -134,6 +134,44 @@ function getCompKey(comp) {
     return `folhapay_comp_${empId}_${comp}`;
 }
 
+// Arquivos da competência guardados no navegador (IndexedDB, por empresa + mês) para reprocessar
+// sem anexar de novo. localStorage não comporta os arquivos; o IndexedDB guarda o File inteiro.
+function idbFiles(op, key, value) {
+    return new Promise((resolve, reject) => {
+        const open = indexedDB.open('folhapay_files', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('files');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+            const store = open.result.transaction('files', op === 'get' ? 'readonly' : 'readwrite').objectStore('files');
+            const req = op === 'get' ? store.get(key) : op === 'put' ? store.put(value, key) : op === 'delete' ? store.delete(key) : store.clear();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        };
+    });
+}
+
+// Chamado só quando o usuário muda os arquivos (anexar/remover/limpar): metadados "virtuais" não são arquivos.
+function persistFiles() {
+    const real = f => f && f.type !== 'virtual';
+    const f = state.files;
+    idbFiles('put', getCompKey(state.competencia), {
+        planilha: f.planilha.filter(real), pdf: f.pdf.filter(real),
+        encargos: real(f.encargos) ? f.encargos : null, fgtsDigital: real(f.fgtsDigital) ? f.fgtsDigital : null,
+        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null
+    }).catch(e => console.warn('Arquivos não guardados no navegador:', e));
+}
+
+// Ao abrir a página ou trocar empresa/competência: os arquivos guardados substituem os metadados.
+async function restoreStoredFiles() {
+    let saved;
+    try { saved = await idbFiles('get', getCompKey(state.competencia)); } catch (e) { return; }
+    if (!saved) return;
+    state.files = { planilha: saved.planilha || [], pdf: saved.pdf || [], ponto: null, encargos: saved.encargos,
+        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf };
+    renderFilePreviews();
+    checkUploadProgress();
+}
+
 async function saveState() {
     // Dados globais (empresas, config)
     const globalData = {
@@ -305,14 +343,16 @@ function applyState(data) {
     renderFilePreviews();
     renderConciliacao();
     checkUploadProgress();
+    restoreStoredFiles();
 }
 
 async function resetSistema() {
     if (confirm('ATENÇÃO: Isso excluirá PERMANENTEMENTE todas as empresas, configurações e dados salvos no banco de dados. Deseja continuar?')) {
         showLoading('Limpando sistema...');
         
-        // 1. Limpa LocalStorage
+        // 1. Limpa LocalStorage e os arquivos guardados no navegador
         localStorage.clear();
+        await idbFiles('clear').catch(() => {});
         
         // 2. Limpa MongoDB
         try {
@@ -488,12 +528,14 @@ function routeFilesAutomatically(fileList) {
     });
 
     // Aplicar roteamento substituindo metadados virtuais pelos arquivos reais selecionados.
+    // Arquivo com o mesmo nome substitui o anterior (versão corrigida), em vez de somar em dobro.
     const isVirtual = file => file && file.type === 'virtual';
+    const keep = (list, novos) => list.filter(file => !isVirtual(file) && !novos.some(n => n.name === file.name));
     if (routed.pdf.length) {
-        state.files.pdf = [...state.files.pdf.filter(file => !isVirtual(file)), ...routed.pdf];
+        state.files.pdf = [...keep(state.files.pdf, routed.pdf), ...routed.pdf];
     }
     if (routed.planilha) {
-        state.files.planilha = [...state.files.planilha.filter(file => !isVirtual(file)), routed.planilha];
+        state.files.planilha = [...keep(state.files.planilha, [routed.planilha]), routed.planilha];
     }
     if (routed.encargos) state.files.encargos = routed.encargos;
     if (routed.esocial) state.files.esocial = routed.esocial;
@@ -510,6 +552,7 @@ function routeFilesAutomatically(fileList) {
 
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -524,8 +567,10 @@ function processUploadedFiles(fileList, type) {
         extension: [...new Set(files.map(file => String(file.name || '').split('.').pop().toLowerCase()))].join(',')
     });
 
-    const realPlanilhas = (state.files.planilha || []).filter(file => file && file.type !== 'virtual');
-    const realPdfs = (state.files.pdf || []).filter(file => file && file.type !== 'virtual');
+    // Arquivo com o mesmo nome substitui o anterior (versão corrigida), em vez de somar em dobro.
+    const keep = file => file && file.type !== 'virtual' && !files.some(n => n.name === file.name);
+    const realPlanilhas = (state.files.planilha || []).filter(keep);
+    const realPdfs = (state.files.pdf || []).filter(keep);
     if (type === 'planilha') {
         state.files.planilha = [...realPlanilhas, ...files];
     } else if (type === 'pdf') {
@@ -537,6 +582,7 @@ function processUploadedFiles(fileList, type) {
     renderFilePreviews();
     checkUploadProgress();
     showToast(`Arquivo(s) carregado(s) com sucesso: ${type}`, 'success');
+    persistFiles();
     saveState();
 }
 
@@ -648,6 +694,7 @@ function removeFile(key, index) {
     }
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -655,6 +702,7 @@ function clearAllFiles() {
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -2390,6 +2438,7 @@ function updateQuickCompetencia(value) {
 
     // Carregar dados da nova competência (ou zerar se não houver)
     const hadData = loadCompetenciaData(value);
+    restoreStoredFiles();
     const msg = hadData
         ? `Competência alterada para ${getCompetenciaExtenso()}`
         : `Competência ${getCompetenciaExtenso()} iniciada sem dados — faça o upload dos arquivos`;
@@ -2724,6 +2773,7 @@ function activateEmpresa(id) {
 
     // Recarregar os dados específicos desta empresa para a competência atual
     loadCompetenciaData(state.competencia);
+    restoreStoredFiles();
 
     showToast('Empresa ativa alterada!', 'success');
     renderConfig();
@@ -4009,8 +4059,9 @@ function excluirDadosCompetencia() {
     showLoading('Limpando dados da competência...');
     
     setTimeout(() => {
-            // Reset files
+            // Reset files (inclusive os guardados no navegador)
             state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
+            idbFiles('delete', getCompKey(state.competencia)).catch(() => {});
             
             // Reset validations
             state.validations.forEach(v => {
