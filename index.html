@@ -306,15 +306,15 @@
             <input type="file" id="input-planilha" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleFileSelect(event,'planilha')" />
           </div>
 
-          <!-- Encargos -->
+          <!-- GRRF (slot "encargos") -->
           <div class="upload-card" id="uploadCard-encargos">
             <div class="upload-card-header">
               <div class="upload-type-icon icon-purple">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20h20M4 20V10M8 20V4M12 20V14M16 20V8M20 20V16"/></svg>
               </div>
               <div>
-                <h3>FGTS / Encargos</h3>
-                <p>Guias FGTS Digital, INSS patronal e encargos sociais</p>
+                <h3>GRRF</h3>
+                <p>Valores de FGTS rescisório dos desligados (RM)</p>
               </div>
               <div class="upload-status-icon" id="status-encargos" style="display:none">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
@@ -323,10 +323,10 @@
             <div class="dropzone" id="drop-encargos" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'encargos')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M2 20h20M4 20V10M8 20V4M12 20V14M16 20V8M20 20V16"/></svg>
               <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('encargos')">clique para selecionar</span></p>
-              <span class="file-hint">.pdf, .xlsx</span>
+              <span class="file-hint">.xlsx</span>
               <div class="file-preview" id="preview-encargos"></div>
             </div>
-            <input type="file" id="input-encargos" accept=".pdf,.xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'encargos')" />
+            <input type="file" id="input-encargos" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'encargos')" />
           </div>
 
           <!-- Retorno FGTS Digital -->
@@ -860,6 +860,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>
