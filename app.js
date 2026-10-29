@@ -717,7 +717,9 @@ async function extractGRRFSummary(file) {
         fgts13Indenizado: 0,
         fgts13Rescisao: 0,
         totalFGTS: 0,
-        baseRescisoriaCalculada: 0
+        baseRescisoriaCalculada: 0,
+        // Por desligado: quitação (saldo do mês) e 13º rescisão, que correspondem ao FGTS da Planilha de Bases.
+        trabalhadores: []
     };
 
     const parseVal = v => {
@@ -842,7 +844,10 @@ async function extractGRRFSummary(file) {
                 result.baseRescisoriaCalculada += (rowFGTS / aliquota);
             }
 
-            if (idx.nome !== -1 && row[idx.nome]) result.qtdDesligados++;
+            if (idx.nome !== -1 && row[idx.nome]) {
+                result.qtdDesligados++;
+                result.trabalhadores.push({ nome: String(row[idx.nome]).trim(), codtipo: idx.codtipo !== -1 ? String(row[idx.codtipo] || '').toUpperCase().trim() : '', quitacao: q, rescisao13: r13 });
+            }
             else if (idx.chapa !== -1 && row[idx.chapa]) result.qtdDesligados++;
         }
     }
@@ -1309,6 +1314,7 @@ async function processFiles() {
                 }
 
                 const grrfData = await extractGRRFSummary(file);
+                audit.grrfTrabalhadores.push(...grrfData.trabalhadores);
                 if (grrfData.isGRRF) {
                     if (grrfData.foundMetrics) {
                         const grrfKeys = Object.keys(state.layoutResults.grrf.fields);
@@ -1431,6 +1437,7 @@ async function processFiles() {
 
             // Detectar se é relatório GRRF (Valores de FGTS Rescisório)
             const grrf = await extractGRRFSummary(planilhaFile);
+            audit.grrfTrabalhadores.push(...grrf.trabalhadores);
 
             // Validação de Layout: GRRF (case-insensitive)
             if (grrf.isGRRF && grrf.foundMetrics) {
@@ -2880,6 +2887,7 @@ function createConciliacaoAudit() {
         analiticoEmployees: [], // bases por funcionário lidas dos blocos do Analítico (TXT/PDF)
         colaboradores: [], // comparação colaborador a colaborador (preenchida por buildComparacaoColaboradores)
         fgtsDigital: [],   // FGTS Digital × Planilha por trabalhador (buildComparacaoFgtsDigital)
+        grrfTrabalhadores: [], // desligados lidos da GRRF (extractGRRFSummary)
         formulas: [],      // memória de cálculo: { fonte, metrica, formula, valor }
         divergencias: [],
         add(stage, level, message, detail = '') {
@@ -3052,6 +3060,24 @@ function buildGovernoFgts(audit, tiposCsv) {
     out.synced = true;
     audit.add('FGTS Digital', 'info', 'Coluna GFD (Governo) do FGTS lida do TiposDeValor',
         `Mensal ${formatCurrency(out.valorMensal)} | 13º ${formatCurrency(out.valor13)} | Rescisório ${formatCurrency(out.valorRescisorio)} | Total ${formatCurrency(out.total)}`);
+
+    // Desligados não entram na guia mensal: o FGTS do mês deles vai na GRRF (quitação → mensal, 13º rescisão → 13º).
+    // A GRRF não traz base; ela é estimada por valor ÷ alíquota (2% aprendiz Z, 8% demais).
+    if (audit.grrfTrabalhadores.length) {
+        const g = { quitacao: 0, rescisao13: 0 };
+        audit.grrfTrabalhadores.forEach(t => {
+            const aliq = (t.codtipo === 'Z' ? (state.config.fgtsJovem || 2) : (state.config.fgts || 8)) / 100;
+            out.baseMensal += t.quitacao / aliq;
+            out.base13 += t.rescisao13 / aliq;
+            g.quitacao += t.quitacao;
+            g.rescisao13 += t.rescisao13;
+        });
+        out.valorMensal += g.quitacao;
+        out.valor13 += g.rescisao13;
+        out.total += g.quitacao + g.rescisao13;
+        audit.add('FGTS Digital', 'info', `GRRF do mês somada à coluna GFD (${audit.grrfTrabalhadores.length} desligado(s))`,
+            `FGTS quitação ${formatCurrency(g.quitacao)} no mensal | FGTS 13º rescisão ${formatCurrency(g.rescisao13)} no 13º | bases estimadas por valor ÷ alíquota`);
+    }
     return out;
 }
 
@@ -3084,12 +3110,14 @@ function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
     const planilha = new Map();
     audit.planilhaRows.forEach(r => {
         const key = nameKey(r.nome);
-        const acc = planilha.get(key) || { nome: r.nome, base: 0, fgts: 0 };
+        const acc = planilha.get(key) || { nome: r.nome, situacao: String(r.situacao || '').toUpperCase(), base: 0, fgts: 0 };
         acc.base += r.baseFgts + r.baseFgtsAv + r.baseFgts13Av + r.baseFgts13 + (r.baseFgtsDifSal || 0);
         acc.fgts += r.fgtsValor || 0;
         planilha.set(key, acc);
     });
 
+    // Desligados saem da guia mensal: o FGTS do mês deles (quitação + 13º rescisão) vai na GRRF.
+    const grrf = new Map(audit.grrfTrabalhadores.map(t => [nameKey(t.nome), t.quitacao + t.rescisao13]));
     const d = (x, y) => Math.round(((x || 0) - (y || 0)) * 100) / 100 + 0;
     const result = [];
     new Set([...guia.keys(), ...planilha.keys()]).forEach(key => {
@@ -3103,16 +3131,17 @@ function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
         };
         item.difBase = d(item.basePlanilha, item.baseGuia);
         item.difFgts = d(item.fgtsPlanilha, item.fgtsGuia);
-        item.status = !p ? 'Só no FGTS Digital' : !g ? 'Só na Planilha'
+        const pagoGrrf = !g && grrf.has(key) && Math.abs(p.fgts - grrf.get(key)) <= AUDIT_TOLERANCE;
+        item.status = !p ? 'Só no FGTS Digital' : pagoGrrf ? 'Pago na GRRF' : !g && p.situacao === 'P' ? 'Afastado' : !g ? 'Só na Planilha'
             : Math.abs(item.difBase) >= 0.01 || Math.abs(item.difFgts) > AUDIT_TOLERANCE ? 'Divergente' : 'Confere';
         result.push(item);
     });
-    const order = { 'Divergente': 0, 'Só no FGTS Digital': 1, 'Só na Planilha': 2, 'Confere': 3 };
+    const order = { 'Divergente': 0, 'Só no FGTS Digital': 1, 'Só na Planilha': 2, 'Afastado': 3, 'Pago na GRRF': 4, 'Confere': 5 };
     result.sort((x, y) => order[x.status] - order[y.status] || Math.abs(y.difFgts) - Math.abs(x.difFgts));
 
     const count = status => result.filter(r => r.status === status).length;
-    audit.add('FGTS Digital', result.length === count('Confere') ? 'info' : 'warning',
-        `FGTS Digital × Planilha: ${count('Confere')} conferem, ${count('Divergente')} divergentes, ${count('Só no FGTS Digital')} só no FGTS Digital, ${count('Só na Planilha')} só na Planilha`,
+    audit.add('FGTS Digital', result.length === count('Confere') + count('Pago na GRRF') ? 'info' : 'warning',
+        `FGTS Digital × Planilha: ${count('Confere')} conferem, ${count('Pago na GRRF')} pagos na GRRF, ${count('Afastado')} afastados fora da guia, ${count('Divergente')} divergentes, ${count('Só no FGTS Digital')} só no FGTS Digital, ${count('Só na Planilha')} só na Planilha`,
         `${guia.size} trabalhadores em ${arquivo} × ${planilha.size} colaboradores na Planilha`);
     return result;
 }
@@ -3252,7 +3281,7 @@ function buildDivergencias(conciliacao, audit) {
 
             if (difGov !== null) {
                 const quem = p !== null ? 'Planilha' : 'Analítico';
-                const fonteGov = /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
+                const fonteGov = tributo === 'FGTS' ? 'FGTS Digital' : /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
                 const descMenosCalc = governo.segDescontado != null && governo.segCalculado != null ? governo.segDescontado - governo.segCalculado : null;
                 if (key === 'segurados' && descMenosCalc !== null && Math.abs(descMenosCalc) >= 0.01 && near(difGov, descMenosCalc)) {
                     motivos.push(`${quem} − eSocial = ${formatCurrency(difGov)}: igual à diferença entre o INSS descontado pela folha (${formatCurrency(governo.segDescontado)}) e o calculado pelo eSocial (${formatCurrency(governo.segCalculado)}). A folha descontou ${formatCurrency(descMenosCalc)} a ${descMenosCalc > 0 ? 'mais' : 'menos'} do que o devido; o código 1082 usa o valor calculado.`);
@@ -3358,12 +3387,12 @@ function renderConciliacaoLog() {
                 <th style="text-align:right">Base INSS Analítico (mensal + 13º)</th><th style="text-align:right">Base INSS Planilha (mensal + 13º)</th><th style="text-align:right">Dif. INSS</th>
                 <th style="text-align:right">FGTS Analítico</th><th style="text-align:right">FGTS Planilha</th><th style="text-align:right">Dif. FGTS</th>
                 <th style="text-align:right">Dif. FGTS 13º</th><th style="text-align:right">INSS desc. Analítico</th><th style="text-align:right">INSS desc. Planilha</th><th style="text-align:right">Dif. INSS desc.</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
-        ${audit.fgtsDigital.length === 0 ? '' : section('2b. FGTS Digital × Planilha (por trabalhador)', audit.fgtsDigital.filter(c => c.status !== 'Confere').length,
-            `<p style="font-size:0.8rem; color:var(--text-muted); margin:8px 0">Base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL · FGTS = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF. Lista só as divergências (${audit.fgtsDigital.filter(c => c.status === 'Confere').length} conferem).</p>
+        ${audit.fgtsDigital.length === 0 ? '' : section('2b. FGTS Digital × Planilha (por trabalhador)', audit.fgtsDigital.filter(c => !['Confere', 'Pago na GRRF'].includes(c.status)).length,
+            `<p style="font-size:0.8rem; color:var(--text-muted); margin:8px 0">Base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL · FGTS = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF. Lista só as divergências (${audit.fgtsDigital.filter(c => c.status === 'Confere').length} conferem, ${audit.fgtsDigital.filter(c => c.status === 'Pago na GRRF').length} pagos na GRRF).</p>
             <table class="data-table"><thead><tr><th>Status</th><th>Nome</th>
                 <th style="text-align:right">Base Planilha</th><th style="text-align:right">Base FGTS Digital</th><th style="text-align:right">Dif. Base</th>
                 <th style="text-align:right">FGTS Planilha</th><th style="text-align:right">FGTS na Guia</th><th style="text-align:right">Dif. FGTS</th></tr></thead><tbody>${
-                audit.fgtsDigital.filter(c => c.status !== 'Confere').map(c => `<tr>
+                audit.fgtsDigital.filter(c => !['Confere', 'Pago na GRRF'].includes(c.status)).map(c => `<tr>
                     <td style="color:${c.status === 'Divergente' ? 'var(--accent-red)' : 'var(--accent-orange)'}; font-weight:600">${escapeHtml(c.status)}</td>
                     <td>${escapeHtml(c.nome)}</td>
                     <td style="text-align:right; ${mono}">${money(c.basePlanilha)}</td><td style="text-align:right; ${mono}">${money(c.baseGuia)}</td>
