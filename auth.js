@@ -127,7 +127,8 @@ function showAppScreen() {
     const sidebar = document.getElementById('sidebar');
 
     if (overlay) overlay.style.display = 'none';
-    if (main) main.style.display = '';
+    // styles.css esconde .main-content até o login; '' voltaria ao display:none da folha de estilo.
+    if (main) main.style.display = 'flex';
     if (sidebar) sidebar.style.display = '';
 
     renderUserBadge();
