@@ -588,7 +588,7 @@ function renderFilePreviews() {
     state.files.planilha.forEach((f, idx) => allFileItems.push({ type: 'Planilha', file: f, key: 'planilha', index: idx }));
     state.files.pdf.forEach((f, idx) => allFileItems.push({ type: 'PDF', file: f, key: 'pdf', index: idx }));
     if (state.files.ponto) allFileItems.push({ type: 'Ponto', file: state.files.ponto, key: 'ponto' });
-    if (state.files.encargos) allFileItems.push({ type: 'Encargos', file: state.files.encargos, key: 'encargos' });
+    if (state.files.encargos) allFileItems.push({ type: 'GRRF', file: state.files.encargos, key: 'encargos' });
     if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
 
     if (allFileItems.length === 0) {
@@ -1376,8 +1376,8 @@ async function processFiles() {
             prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
-        // GRRF solta no card de Encargos passa pelo mesmo leitor da planilha (outras guias cairiam no fallback de bases).
-        const encargosXlsx = state.files.encargos && /grrf.*\.xlsx?$/i.test(state.files.encargos.name) ? [state.files.encargos] : [];
+        // Card GRRF (slot "encargos") passa pelo mesmo leitor da planilha, sem o fallback de bases (abaixo).
+        const encargosXlsx = state.files.encargos && /\.xlsx?$/i.test(state.files.encargos.name) ? [state.files.encargos] : [];
         for (const planilhaFile of [...state.files.planilha, ...encargosXlsx].filter(file => !isVirtual(file))) {
 
             // Executar extrator unificado para validação de layout
@@ -1484,7 +1484,7 @@ async function processFiles() {
             }
 
             // Bases e GRRF não são exclusivos: o mesmo workbook pode ter a aba BASES e a aba GRRF.
-            if (hasBasesTable || !grrf.isGRRF) {
+            if (hasBasesTable || (!grrf.isGRRF && planilhaFile !== state.files.encargos)) {
                 // Planilha tabular normal de confronto de bases
                 if (!hasBasesTable) {
                     jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
@@ -2066,7 +2066,7 @@ function simulateValidation(id) {
             ...(state.files.planilha || []),
             ...(state.files.encargos ? [state.files.encargos] : [])
         ];
-        const hasGRRF = uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
+        const hasGRRF = !!state.files.encargos || uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
         const fields = state.layoutResults.grrf.fields;
         // RM só exporta colunas de FGTS com movimento; exigir só os identificadores (o extrator já exige uma coluna de valor).
         const missing = ['NOME', 'CHAPA', 'CODTIPO'].filter(name => !fields[name]);
