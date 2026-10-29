@@ -134,6 +134,44 @@ function getCompKey(comp) {
     return `folhapay_comp_${empId}_${comp}`;
 }
 
+// Arquivos da competência guardados no navegador (IndexedDB, por empresa + mês) para reprocessar
+// sem anexar de novo. localStorage não comporta os arquivos; o IndexedDB guarda o File inteiro.
+function idbFiles(op, key, value) {
+    return new Promise((resolve, reject) => {
+        const open = indexedDB.open('folhapay_files', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('files');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+            const store = open.result.transaction('files', op === 'get' ? 'readonly' : 'readwrite').objectStore('files');
+            const req = op === 'get' ? store.get(key) : op === 'put' ? store.put(value, key) : op === 'delete' ? store.delete(key) : store.clear();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        };
+    });
+}
+
+// Chamado só quando o usuário muda os arquivos (anexar/remover/limpar): metadados "virtuais" não são arquivos.
+function persistFiles() {
+    const real = f => f && f.type !== 'virtual';
+    const f = state.files;
+    idbFiles('put', getCompKey(state.competencia), {
+        planilha: f.planilha.filter(real), pdf: f.pdf.filter(real),
+        encargos: real(f.encargos) ? f.encargos : null, fgtsDigital: real(f.fgtsDigital) ? f.fgtsDigital : null,
+        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null
+    }).catch(e => console.warn('Arquivos não guardados no navegador:', e));
+}
+
+// Ao abrir a página ou trocar empresa/competência: os arquivos guardados substituem os metadados.
+async function restoreStoredFiles() {
+    let saved;
+    try { saved = await idbFiles('get', getCompKey(state.competencia)); } catch (e) { return; }
+    if (!saved) return;
+    state.files = { planilha: saved.planilha || [], pdf: saved.pdf || [], ponto: null, encargos: saved.encargos,
+        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf };
+    renderFilePreviews();
+    checkUploadProgress();
+}
+
 async function saveState() {
     // Dados globais (empresas, config)
     const globalData = {
@@ -305,14 +343,16 @@ function applyState(data) {
     renderFilePreviews();
     renderConciliacao();
     checkUploadProgress();
+    restoreStoredFiles();
 }
 
 async function resetSistema() {
     if (confirm('ATENÇÃO: Isso excluirá PERMANENTEMENTE todas as empresas, configurações e dados salvos no banco de dados. Deseja continuar?')) {
         showLoading('Limpando sistema...');
         
-        // 1. Limpa LocalStorage
+        // 1. Limpa LocalStorage e os arquivos guardados no navegador
         localStorage.clear();
+        await idbFiles('clear').catch(() => {});
         
         // 2. Limpa MongoDB
         try {
@@ -328,14 +368,28 @@ async function resetSistema() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+// --- Autenticação: bootstrap depois do login ---
+async function bootstrapAuthenticatedApp() {
     // Carrega dados persistidos
     await loadState();
-    
+
     // Inicializa a interface
     renderDashboard();
     renderFechamentoSteps();
     updateDashboard();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Inicializa autenticação
+    const authInitialized = await initAuth();
+    if (!authInitialized) {
+        // Não carregar UI se não autenticado - login já foi mostrado
+        debugLog('app.initialized', { outcome: 'unauthenticated' });
+        return;
+    }
+
+    // Inicializa a interface (depois de autenticado)
+    await bootstrapAuthenticatedApp();
 
     // Listener global para navegação
     document.addEventListener('click', (e) => {
@@ -346,7 +400,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             showView(viewId, navItem);
         }
     });
-    
+
+    // Configura formulários de autenticação
+    setupAuthForms();
+
     debugLog('app.initialized', { outcome: 'ready' });
 });
 
@@ -444,7 +501,7 @@ function routeFilesAutomatically(fileList) {
     const files = Array.from(fileList);
     if (!files.length) return;
 
-    const routed = { pdf: [], planilha: null, encargos: null };
+    const routed = { pdf: [], planilha: null, encargos: null, esocial: null, dctf: null };
     const extensions = files.map(file => String(file.name || '').split('.').pop().toLowerCase());
 
     files.forEach(file => {
@@ -454,6 +511,13 @@ function routeFilesAutomatically(fileList) {
         // Planilha de Bases/Confronto: deve alimentar a conciliação, não o analítico
         if (/base|bases|confronto/i.test(name) && (ext === 'xlsx' || ext === 'xls' || ext === 'csv')) {
             routed.planilha = file;
+        }
+        // eSocial (resumo S-5011) e DCTFWeb em Excel têm cards próprios
+        else if (/esocial/i.test(name) && (ext === 'xlsx' || ext === 'xls')) {
+            routed.esocial = file;
+        }
+        else if (/dctf/i.test(name) && (ext === 'xlsx' || ext === 'xls')) {
+            routed.dctf = file;
         }
         // Encargos: GFD, FGTS Digital, guias
         else if (/fgts|gfd|guia|encargo|dctf|esocial/i.test(name) && (ext === 'xlsx' || ext === 'pdf')) {
@@ -481,24 +545,31 @@ function routeFilesAutomatically(fileList) {
     });
 
     // Aplicar roteamento substituindo metadados virtuais pelos arquivos reais selecionados.
+    // Arquivo com o mesmo nome substitui o anterior (versão corrigida), em vez de somar em dobro.
     const isVirtual = file => file && file.type === 'virtual';
+    const keep = (list, novos) => list.filter(file => !isVirtual(file) && !novos.some(n => n.name === file.name));
     if (routed.pdf.length) {
-        state.files.pdf = [...state.files.pdf.filter(file => !isVirtual(file)), ...routed.pdf];
+        state.files.pdf = [...keep(state.files.pdf, routed.pdf), ...routed.pdf];
     }
     if (routed.planilha) {
-        state.files.planilha = [...state.files.planilha.filter(file => !isVirtual(file)), routed.planilha];
+        state.files.planilha = [...keep(state.files.planilha, [routed.planilha]), routed.planilha];
     }
     if (routed.encargos) state.files.encargos = routed.encargos;
+    if (routed.esocial) state.files.esocial = routed.esocial;
+    if (routed.dctf) state.files.dctf = routed.dctf;
 
     // Toast descritivo
     const parts = [];
     if (routed.pdf.length)  parts.push(`${routed.pdf.length} Analítico(s)`);
     if (routed.planilha)    parts.push('1 Planilha');
-    if (routed.encargos)    parts.push('1 Encargos');
+    if (routed.encargos)    parts.push('1 GRRF');
+    if (routed.esocial)     parts.push('1 eSocial');
+    if (routed.dctf)        parts.push('1 DCTFWeb');
     showToast(`✅ ${parts.join(', ')} classificado(s) automaticamente`, 'success');
 
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -513,8 +584,10 @@ function processUploadedFiles(fileList, type) {
         extension: [...new Set(files.map(file => String(file.name || '').split('.').pop().toLowerCase()))].join(',')
     });
 
-    const realPlanilhas = (state.files.planilha || []).filter(file => file && file.type !== 'virtual');
-    const realPdfs = (state.files.pdf || []).filter(file => file && file.type !== 'virtual');
+    // Arquivo com o mesmo nome substitui o anterior (versão corrigida), em vez de somar em dobro.
+    const keep = file => file && file.type !== 'virtual' && !files.some(n => n.name === file.name);
+    const realPlanilhas = (state.files.planilha || []).filter(keep);
+    const realPdfs = (state.files.pdf || []).filter(keep);
     if (type === 'planilha') {
         state.files.planilha = [...realPlanilhas, ...files];
     } else if (type === 'pdf') {
@@ -526,13 +599,14 @@ function processUploadedFiles(fileList, type) {
     renderFilePreviews();
     checkUploadProgress();
     showToast(`Arquivo(s) carregado(s) com sucesso: ${type}`, 'success');
+    persistFiles();
     saveState();
 }
 
 function renderFilePreviews() {
     // Update individual dropzone previews
     // Slots com arquivo único
-    ['encargos'].forEach(type => {
+    ['encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(type => {
         const file = state.files[type];
         const previewEl = document.getElementById(`preview-${type}`);
         const statusEl  = document.getElementById(`status-${type}`);
@@ -588,7 +662,10 @@ function renderFilePreviews() {
     state.files.planilha.forEach((f, idx) => allFileItems.push({ type: 'Planilha', file: f, key: 'planilha', index: idx }));
     state.files.pdf.forEach((f, idx) => allFileItems.push({ type: 'PDF', file: f, key: 'pdf', index: idx }));
     if (state.files.ponto) allFileItems.push({ type: 'Ponto', file: state.files.ponto, key: 'ponto' });
-    if (state.files.encargos) allFileItems.push({ type: 'Encargos', file: state.files.encargos, key: 'encargos' });
+    if (state.files.encargos) allFileItems.push({ type: 'GRRF', file: state.files.encargos, key: 'encargos' });
+    if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
+    if (state.files.esocial) allFileItems.push({ type: 'eSocial', file: state.files.esocial, key: 'esocial' });
+    if (state.files.dctf) allFileItems.push({ type: 'DCTFWeb', file: state.files.dctf, key: 'dctf' });
 
     if (allFileItems.length === 0) {
         html = `
@@ -634,6 +711,7 @@ function removeFile(key, index) {
     }
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -641,6 +719,7 @@ function clearAllFiles() {
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     renderFilePreviews();
     checkUploadProgress();
+    persistFiles();
     saveState();
 }
 
@@ -716,7 +795,9 @@ async function extractGRRFSummary(file) {
         fgts13Indenizado: 0,
         fgts13Rescisao: 0,
         totalFGTS: 0,
-        baseRescisoriaCalculada: 0
+        baseRescisoriaCalculada: 0,
+        // Por desligado: quitação (saldo do mês) e 13º rescisão, que correspondem ao FGTS da Planilha de Bases.
+        trabalhadores: []
     };
 
     const parseVal = v => {
@@ -841,7 +922,10 @@ async function extractGRRFSummary(file) {
                 result.baseRescisoriaCalculada += (rowFGTS / aliquota);
             }
 
-            if (idx.nome !== -1 && row[idx.nome]) result.qtdDesligados++;
+            if (idx.nome !== -1 && row[idx.nome]) {
+                result.qtdDesligados++;
+                result.trabalhadores.push({ nome: String(row[idx.nome]).trim(), codtipo: idx.codtipo !== -1 ? String(row[idx.codtipo] || '').toUpperCase().trim() : '', quitacao: q, rescisao13: r13 });
+            }
             else if (idx.chapa !== -1 && row[idx.chapa]) result.qtdDesligados++;
         }
     }
@@ -1130,7 +1214,7 @@ async function processFiles() {
     Object.keys(state.layoutResults.grrf.fields).forEach(k => state.layoutResults.grrf.fields[k] = false);
 
     try {
-        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0;
+        let pdfProventos = 0, pdfDescontos = 0, pdfLiquidoFolha = 0, pdfLiquidoPro = 0, pdfAtivos = 0, pdfAfastados = 0, pdfDesligados = 0, pdfSalarioFamilia = 0;
         let pdfBases = { inss: 0, inss13: 0, inssAuton: 0, inssProLabore: 0, fgts: 0, fgts13: 0, fgts2: 0, irrf: 0, irrf13: 0, irrfFerias: 0 };
         // null = rótulo não encontrado no relatório (0 é um valor lido válido, ex.: CPP zerada no RM).
         let pdfEncargos = { inssEmpresa: null, inssSat: null, inssTerceiros: null, inssSatAjustado: null, inssSegurado: null, fgtsDep: 0, fgts13Dep: 0 };
@@ -1188,6 +1272,10 @@ async function processFiles() {
                             state.layoutResults.analitico.fields['PRO LABORE'] = true;
                         }
                     }
+
+                    // 1014 SALARIO FAMILIA  3  3  150,84 — só a linha de total (N.F. + Ref); por funcionário vem só a Ref.
+                    const mSalFam = clean.match(/1014\s+SALARIO\s+FAMILIA\s+\d+\s+[\d,.]+\s+([\d.]+,\d{2})/i);
+                    if (mSalFam) pdfSalarioFamilia = Math.max(pdfSalarioFamilia, parseNum(mSalFam[1]));
 
                     // 4016 LIQUIDO FOLHA PAGAMENTO ... 589.840,80
                     if (/4016\s+LIQUIDO\s+FOLHA\s+PAGAMENTO/i.test(clean)) {
@@ -1312,6 +1400,7 @@ async function processFiles() {
                 }
 
                 const grrfData = await extractGRRFSummary(file);
+                audit.grrfTrabalhadores.push(...grrfData.trabalhadores);
                 if (grrfData.isGRRF) {
                     if (grrfData.foundMetrics) {
                         const grrfKeys = Object.keys(state.layoutResults.grrf.fields);
@@ -1369,12 +1458,14 @@ async function processFiles() {
         // inss13/inssAutonomo/segurados alimentam os encargos; hasSegurados indica se a Planilha traz o INSS descontado.
         // prolabore/seguradosCI = contribuintes individuais (CODTIPO D); irrf* = IRRF retido; difSal = BASEFGTSDIFSAL.
         let govData = null;
+        const govResumo = gov => [gov.esocial && `eSocial (aba "${gov.esocial.aba}"): base ${formatCurrency(gov.esocial.base || 0)}, ${Object.keys(gov.esocial.codes).length} códigos de receita`,
+            gov.dctf && `DCTFWeb (aba "${gov.dctf.aba}"): total apurado ${formatCurrency(gov.dctf.totalApurado || 0)}, IRRF ${formatCurrency(gov.dctf.irrf || 0)}`].filter(Boolean).join(' | ');
         let excelBases = { inss: 0, inss13: 0, inssAutonomo: 0, segurados: 0, hasSegurados: false,
-            prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
+            prolabore: 0, seguradosCI: 0, difSal: 0, salarioFamilia: 0, hasSalarioFamilia: false, irrfMensal: 0, irrf13: 0, irrfFerias: 0, hasIrrf: false, fgts: 0, fgts13: 0, fgtsN: 0, fgtsN13: 0, fgtsZ: 0, fgtsZ13: 0, irrf: 0 };
         let excelSummary = { bruto: 0, descontos: 0, liquido: 0, colaboradores: 0, ativos: 0, afastados: 0, desligados: 0 };
         
-        // GRRF solta no card de Encargos passa pelo mesmo leitor da planilha (outras guias cairiam no fallback de bases).
-        const encargosXlsx = state.files.encargos && /grrf.*\.xlsx?$/i.test(state.files.encargos.name) ? [state.files.encargos] : [];
+        // Card GRRF (slot "encargos") passa pelo mesmo leitor da planilha, sem o fallback de bases (abaixo).
+        const encargosXlsx = state.files.encargos && /\.xlsx?$/i.test(state.files.encargos.name) ? [state.files.encargos] : [];
         for (const planilhaFile of [...state.files.planilha, ...encargosXlsx].filter(file => !isVirtual(file))) {
 
             // Executar extrator unificado para validação de layout
@@ -1422,10 +1513,7 @@ async function processFiles() {
             const gov = extractGovernoSummary(workbook);
             if (gov && !govData) {
                 govData = gov;
-                audit.add('Governo', 'info', `Valores do governo lidos de ${planilhaFile.name}`,
-                    [gov.esocial && `eSocial (aba "${gov.esocial.aba}"): base ${formatCurrency(gov.esocial.base || 0)}, ${Object.keys(gov.esocial.codes).length} códigos de receita`,
-                     gov.dctf && `DCTFWeb (aba "${gov.dctf.aba}"): total apurado ${formatCurrency(gov.dctf.totalApurado || 0)}, IRRF ${formatCurrency(gov.dctf.irrf || 0)}`]
-                        .filter(Boolean).join(' | '));
+                audit.add('Governo', 'info', `Valores do governo lidos de ${planilhaFile.name}`, govResumo(gov));
             }
             audit.add('Planilha', hasBasesTable ? 'info' : 'warning', `Lendo ${planilhaFile.name}`,
                 hasBasesTable
@@ -1434,6 +1522,7 @@ async function processFiles() {
 
             // Detectar se é relatório GRRF (Valores de FGTS Rescisório)
             const grrf = await extractGRRFSummary(planilhaFile);
+            audit.grrfTrabalhadores.push(...grrf.trabalhadores);
 
             // Validação de Layout: GRRF (case-insensitive)
             if (grrf.isGRRF && grrf.foundMetrics) {
@@ -1480,7 +1569,7 @@ async function processFiles() {
             }
 
             // Bases e GRRF não são exclusivos: o mesmo workbook pode ter a aba BASES e a aba GRRF.
-            if (hasBasesTable || !grrf.isGRRF) {
+            if (hasBasesTable || (!grrf.isGRRF && planilhaFile !== state.files.encargos)) {
                 // Planilha tabular normal de confronto de bases
                 if (!hasBasesTable) {
                     jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
@@ -1531,7 +1620,9 @@ async function processFiles() {
                     salarioFamilia: headers.findIndex(h => /^(VALOR)?SAL(ARIO)?FAM(ILIA)?$/.test(normalizeHeader(h))),
                     irrfValor: headers.findIndex(h => normalizeHeader(h) === 'IRRF'),
                     irrf13Valor: headers.findIndex(h => normalizeHeader(h) === 'IRRF13'),
-                    irrfFeriasValor: headers.findIndex(h => normalizeHeader(h) === 'IRRFFERIAS')
+                    irrfFeriasValor: headers.findIndex(h => normalizeHeader(h) === 'IRRFFERIAS'),
+                    // Valor do FGTS por colaborador (comparado com o retorno do FGTS Digital).
+                    fgtsValores: ['FGTSMES', 'FGTSAVISO', 'FGTS13AVISO', 'FGTS13', 'FGTSDIF'].map(k => headers.findIndex(h => normalizeHeader(h) === k))
                 };
                 const rows = jsonData.slice(headerRowIndex + 1);
                 auditColumnMapping(audit, planilhaFile.name, headers, idx, ['inss', 'fgts', 'fgts13']);
@@ -1601,6 +1692,7 @@ async function processFiles() {
                     const val = key => (idx[key] !== -1 ? parseV(row[idx[key]]) : 0);
                     excelBases.difSal += val('baseDifSal');
                     excelBases.salarioFamilia += val('salarioFamilia');
+                    if (idx.salarioFamilia !== -1) excelBases.hasSalarioFamilia = true;
                     excelBases.irrfMensal += val('irrfValor');
                     excelBases.irrf13 += val('irrf13Valor');
                     excelBases.irrfFerias += val('irrfFeriasValor');
@@ -1637,6 +1729,8 @@ async function processFiles() {
                         baseFgtsAv: valFgtsAv,
                         baseFgts13: valFgts13,
                         baseFgts13Av: valFgts13Av,
+                        baseFgtsDifSal: val('baseDifSal'),
+                        fgtsValor: idx.fgtsValores.reduce((acc, c) => acc + (c !== -1 ? parseV(row[c]) : 0), 0),
                         baseIrrf: idx.irrf !== -1 ? parseV(row[idx.irrf]) : 0
                     });
                     
@@ -1663,6 +1757,7 @@ async function processFiles() {
                             if (found === null) found = row.slice(c + 1).map(toNum).find(v => v !== null) ?? null;
                             if (found !== null) {
                                 excelBases.salarioFamilia += found;
+                                excelBases.hasSalarioFamilia = true;
                                 audit.add('Planilha', 'info', `Salário-família lido do bloco de resumo de ${planilhaFile.name}`, `${formatCurrency(found)} (célula ${XLSX.utils.encode_col(c)}${r + 1} e abaixo)`);
                                 break outer;
                             }
@@ -1781,11 +1876,12 @@ async function processFiles() {
                 ratfap: ratfap,
                 terceiros: terceiros,
                 subtotal: segurados + patronal + ratfap + terceiros,
-                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—". Guia sem salário-família fica "—".
+                // CI só quando o sócio vem no Analítico (blocos de pró-labore); senão "—", e a guia também (faltaria o CI).
                 baseCI: ciBlocks.length ? baseProLaboreCI + (pdfBases.inssAuton || 0) : null,
                 seguradosCI: ciBlocks.length ? ciA.seg : null,
                 patronalCI: ciBlocks.length ? cppProLaboreCI + patronalCIAnalitico : null,
-                salarioFamilia: null, total: null
+                salarioFamilia: pdfSalarioFamilia,
+                total: ciBlocks.length ? segurados + patronal + ratfap + terceiros + ciA.seg + cppProLaboreCI + patronalCIAnalitico - pdfSalarioFamilia : null
             }
         ];
 
@@ -1814,9 +1910,23 @@ async function processFiles() {
                 baseCI: baseCIExcel,
                 seguradosCI: excelBases.seguradosCI,
                 patronalCI: baseCIExcel * aliqPatronal,
-                salarioFamilia: excelBases.salarioFamilia,
-                total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - excelBases.salarioFamilia
+                // Planilha sem coluna/resumo de salário-família: "—" (fora da comparação), não R$ 0,00.
+                salarioFamilia: excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : null,
+                // Sem salário-família na Planilha, a guia desconta o do Analítico (validado contra o eSocial).
+                total: subtotalExcel + excelBases.seguradosCI + baseCIExcel * aliqPatronal - (excelBases.hasSalarioFamilia ? excelBases.salarioFamilia : pdfSalarioFamilia)
             });
+        }
+
+        // Cards eSocial e DCTFWeb: têm prioridade sobre abas coladas na Planilha; um arquivo completa o outro.
+        for (const govFile of [state.files.esocial, state.files.dctf].filter(f => f && !isVirtual(f))) {
+            const gov = extractGovernoSummary(XLSX.read(await govFile.arrayBuffer()));
+            if (!gov) {
+                audit.add('Governo', 'error', `${govFile.name} não reconhecido como eSocial nem DCTFWeb`,
+                    'eSocial: resumo com "11 - Base de cálculo da contribuição previdenciária" e códigos de receita; DCTFWeb: "Débitos apurados" / "Total Apurado Empresa"');
+                continue;
+            }
+            govData = { esocial: gov.esocial || (govData && govData.esocial), dctf: gov.dctf || (govData && govData.dctf) };
+            audit.add('Governo', 'info', `Valores do governo lidos de ${govFile.name}`, govResumo(gov));
         }
 
         state.conciliacao.inss.push(buildGovernoINSS(govData, aliqPatronal));
@@ -1877,10 +1987,8 @@ async function processFiles() {
             });
         }
 
-        state.conciliacao.fgts.push({
-            origem: 'FGTS Digital (Governo)',
-            baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0
-        });
+        const fgtsDigitalCsvs = state.files.fgtsDigital && !isVirtual(state.files.fgtsDigital) ? await readFgtsDigital(state.files.fgtsDigital) : null;
+        state.conciliacao.fgts.push(buildGovernoFgts(audit, fgtsDigitalCsvs ? fgtsDigitalCsvs.tiposDeValor : ''));
 
         const ratTxt = `${(aliqRatFap * 100).toFixed(4).replace('.', ',')}% (RAT ${cfg.rat || 2}% × FAP ${cfg.fap || 1})`;
         const pctTxt = v => `${(v * 100).toFixed(2).replace('.', ',')}%`;
@@ -1890,6 +1998,8 @@ async function processFiles() {
         audit.formulas.push(
             { fonte: 'Analítico', metrica: 'INSS · Base Folha', formula: `"Base INSS - Envelope" ${formatCurrency(inssBase)} + "Base INSS 13º - Envelope" ${formatCurrency(pdfBases.inss13 || 0)}` + (ciA.base ? ` − contribuintes individuais ${formatCurrency(ciA.base)}` : ''), valor: inssBaseEncargos },
             { fonte: 'Analítico', metrica: 'INSS · Segurados (1082)', formula: origemEncargo(pdfEncargos.inssSegurado, 'INSS Segurado', '9%'), valor: segurados },
+            { fonte: 'Analítico', metrica: 'INSS · Salário-Família', formula: '"1014 SALARIO FAMILIA" do total geral (0 quando a rubrica não aparece)', valor: pdfSalarioFamilia },
+            { fonte: 'Analítico', metrica: 'INSS · Total Guia INSS', formula: ciBlocks.length ? 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família' : 'Sem blocos de pró-labore no Analítico: total não calculado', valor: state.conciliacao.inss[0].total },
             { fonte: 'Analítico', metrica: 'INSS · Patronal (1138-01)', formula: pdfEncargos.inssEmpresa !== null
                 ? `"INSS Empresa" lido do relatório (${formatCurrency(pdfEncargos.inssEmpresa)}) − (autônomos ${formatCurrency(pdfBases.inssAuton || 0)} + "Base INSS Pro-Labore" ${formatCurrency(pdfBases.inssProLabore || 0)}) × ${pctTxt(aliqPatronal)}` + (ciA.emp ? ` − CPP dos blocos de pró-labore ${formatCurrency(ciA.emp)}` : '')
                 : origemEncargo(0, 'INSS Empresa', pctTxt(aliqPatronal)), valor: patronal },
@@ -1919,7 +2029,7 @@ async function processFiles() {
                 { fonte: 'Planilha', metrica: 'INSS · Base Contribuintes Individuais', formula: `Pró-labore (CODTIPO D: maior entre BASEINSS e BASEIRRF) ${formatCurrency(excelBases.prolabore)} + Σ BASE_INSS_AUTONOMO ${formatCurrency(excelBases.inssAutonomo)}`, valor: baseCI },
                 { fonte: 'Planilha', metrica: 'INSS · Segurados CI (1099)', formula: 'Σ (INSS + INSS13 + INSSFERIAS + INSSDIFSAL) com CODTIPO = D', valor: excelBases.seguradosCI },
                 { fonte: 'Planilha', metrica: 'INSS · Patronal CI (1138-04)', formula: `Base CI × ${pctTxt(aliqPatronal)}`, valor: baseCI * aliqPatronal },
-                { fonte: 'Planilha', metrica: 'INSS · Total Guia INSS', formula: 'Subtotal empregados + Segurados CI + Patronal CI − Salário-família', valor: (state.conciliacao.inss.find(x => /Confronto/.test(x.origem)) || {}).total ?? null },
+                { fonte: 'Planilha', metrica: 'INSS · Total Guia INSS', formula: `Subtotal empregados + Segurados CI + Patronal CI − Salário-família ${excelBases.hasSalarioFamilia ? 'da Planilha' : `do Analítico ${formatCurrency(pdfSalarioFamilia)} (Planilha sem salário-família)`}`, valor: (state.conciliacao.inss.find(x => /Confronto/.test(x.origem)) || {}).total ?? null },
                 { fonte: 'Planilha', metrica: 'IRRF · Total IRRF', formula: `Σ IRRF ${formatCurrency(excelBases.irrfMensal)} + Σ IRRF13 ${formatCurrency(excelBases.irrf13)} + Σ IRRFFERIAS ${formatCurrency(excelBases.irrfFerias)}`, valor: excelBases.irrfMensal + excelBases.irrf13 + excelBases.irrfFerias },
                 { fonte: 'Planilha', metrica: 'FGTS · Base Mensal', formula: 'Σ (BASEFGTS + BASEFGTSAVPREVIO)', valor: excelBases.fgts },
                 { fonte: 'Planilha', metrica: 'FGTS · Valor Mensal', formula: `(${formatCurrency(excelBases.fgts - base2Excel)} × 8%) + (${formatCurrency(base2Excel)} CODTIPO Z × 2%)`, valor: (excelBases.fgts - base2Excel) * 0.08 + base2Excel * 0.02 },
@@ -1963,8 +2073,12 @@ async function processFiles() {
             'INSS Segurado': pdfEncargos.inssSegurado
         });
         audit.colaboradores = buildComparacaoColaboradores(audit);
+        if (fgtsDigitalCsvs) {
+            audit.fgtsDigital = buildComparacaoFgtsDigital(audit, state.files.fgtsDigital.name, fgtsDigitalCsvs.trabalhadores);
+        }
         audit.divergencias = buildDivergencias(state.conciliacao, audit);
         conciliacaoAudit = audit;
+        enviarConciliacaoLog(audit);
 
         debugLog('reconciliation.assigned', {
             inss: excelBases.inss,
@@ -2068,7 +2182,7 @@ function simulateValidation(id) {
             ...(state.files.planilha || []),
             ...(state.files.encargos ? [state.files.encargos] : [])
         ];
-        const hasGRRF = uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
+        const hasGRRF = !!state.files.encargos || uploadedFiles.some(f => /grrf/i.test(String(f?.name || '')));
         const fields = state.layoutResults.grrf.fields;
         // RM só exporta colunas de FGTS com movimento; exigir só os identificadores (o extrator já exige uma coluna de valor).
         const missing = ['NOME', 'CHAPA', 'CODTIPO'].filter(name => !fields[name]);
@@ -2357,6 +2471,7 @@ function updateQuickCompetencia(value) {
 
     // Carregar dados da nova competência (ou zerar se não houver)
     const hadData = loadCompetenciaData(value);
+    restoreStoredFiles();
     const msg = hadData
         ? `Competência alterada para ${getCompetenciaExtenso()}`
         : `Competência ${getCompetenciaExtenso()} iniciada sem dados — faça o upload dos arquivos`;
@@ -2691,6 +2806,7 @@ function activateEmpresa(id) {
 
     // Recarregar os dados específicos desta empresa para a competência atual
     loadCompetenciaData(state.competencia);
+    restoreStoredFiles();
 
     showToast('Empresa ativa alterada!', 'success');
     renderConfig();
@@ -2874,9 +2990,34 @@ function buildGovernoINSS(gov, aliqPatronal) {
 }
 
 // --- Log de Conciliação (auditoria ponto a ponto) ---
-// Mantido apenas em memória: contém nomes e valores por colaborador, por isso
-// não entra em saveState() nem é enviado à API. Recriado a cada processamento.
+// Contém nomes e valores por colaborador: não entra em saveState()/localStorage; vai inteiro para
+// a rota autenticada /api/conciliacao-log (histórico: um registro por processamento). Recriado a cada processamento.
 let conciliacaoAudit = null;
+
+async function enviarConciliacaoLog(audit) {
+    const emp = state.empresas.find(e => e.active) || {};
+    const json = JSON.stringify({
+        empresa: emp.nome || state.config?.empresa || '',
+        cnpj: emp.cnpj || state.config?.cnpj || '',
+        competencia: state.competencia,
+        geradoEm: audit.createdAt,
+        data: audit
+    });
+    try {
+        // gzip: o log de uma folha grande passa do limite de 4,5 MB por requisição da Vercel.
+        const gzip = typeof CompressionStream === 'function';
+        const body = gzip ? await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'))).blob() : json;
+        const res = await fetch(`${API_URL}/conciliacao-log`, {
+            method: 'POST',
+            headers: gzip ? { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' } : { 'Content-Type': 'application/json' },
+            body
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+        console.warn('Log de conciliação não enviado ao banco:', e.message);
+        showToast('Log de conciliação não foi salvo no banco (servidor indisponível ou sessão expirada).', 'warning');
+    }
+}
 
 const AUDIT_TOLERANCE = 0.05;
 
@@ -2889,6 +3030,8 @@ function createConciliacaoAudit() {
         planilhaRows: [],  // um registro por colaborador lido da Planilha de Bases
         analiticoEmployees: [], // bases por funcionário lidas dos blocos do Analítico (TXT/PDF)
         colaboradores: [], // comparação colaborador a colaborador (preenchida por buildComparacaoColaboradores)
+        fgtsDigital: [],   // FGTS Digital × Planilha por trabalhador (buildComparacaoFgtsDigital)
+        grrfTrabalhadores: [], // desligados lidos da GRRF (extractGRRFSummary)
         formulas: [],      // memória de cálculo: { fonte, metrica, formula, valor }
         divergencias: [],
         add(stage, level, message, detail = '') {
@@ -3016,6 +3159,134 @@ function buildComparacaoColaboradores(audit) {
     audit.add('Conciliação', count('Divergente') + count('Só no Analítico') + count('Só na Planilha') ? 'warning' : 'info',
         `Colaborador a colaborador: ${count('Confere')} conferem, ${count('Reclassificado')} reclassificados (mensal ↔ 13º, mesmo total), ${count('Divergente')} divergentes, ${count('Só no Analítico')} só no Analítico, ${count('Só na Planilha')} só na Planilha, ${count('Sem bases')} sem bases`,
         `${audit.analiticoEmployees.length} blocos no Analítico × ${audit.planilhaRows.length} linhas na Planilha`);
+    return result;
+}
+
+// Retorno do FGTS Digital: o ZIP traz vários CSVs; usamos Trabalhadores (por pessoa) e TiposDeValor (mensal × 13º).
+// Um CSV solto é tratado como o Trabalhadores.
+async function readFgtsDigital(file) {
+    if (!/\.zip$/i.test(file.name)) return { trabalhadores: await file.text(), tiposDeValor: '' };
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const text = suffix => { const f = zip.file(new RegExp(suffix + '\\.csv$', 'i'))[0]; return f ? f.async('string') : ''; };
+    return { trabalhadores: await text('_Trabalhadores'), tiposDeValor: await text('_TiposDeValor') };
+}
+
+function parseFgtsDigitalCsv(text) {
+    return String(text || '').split(/\r?\n/).filter(l => l.trim()).map(l => l.split(';').map(c => c.trim().replace(/^"|"$/g, '')));
+}
+
+// Valores do FGTS Digital vêm como "5.077,81" (Trabalhadores) ou "638328,50" (TiposDeValor).
+function parseFgtsDigitalNum(v) {
+    return parseFloat(String(v || '').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+// Coluna GFD (Governo) da conciliação de FGTS, do "..._TiposDeValor.csv":
+// "12 - FGTS 13o salario" → 13º; tipos rescisórios → rescisório; o resto (11 mensal, 15 aprendiz…) → mensal.
+function buildGovernoFgts(audit, tiposCsv) {
+    const out = { origem: 'FGTS Digital (Governo)', synced: false, baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0 };
+    const lines = parseFgtsDigitalCsv(tiposCsv);
+    if (lines.length === 0) return out;
+    const col = name => lines[0].indexOf(name);
+    const missing = ['Tipo de Valor', 'Base Remuneracao Total', 'FGTS Mensal na Guia', 'FGTS Rescisorio na Guia'].filter(name => col(name) === -1);
+    if (missing.length) {
+        audit.add('FGTS Digital', 'error', `Colunas ausentes no TiposDeValor do FGTS Digital: ${missing.join(', ')}`, 'Coluna GFD (Governo) do FGTS não preenchida');
+        return out;
+    }
+    lines.slice(1).forEach(r => {
+        const tipo = r[col('Tipo de Valor')];
+        const base = parseFgtsDigitalNum(r[col('Base Remuneracao Total')]);
+        const valor = parseFgtsDigitalNum(r[col('FGTS Mensal na Guia')]) + parseFgtsDigitalNum(r[col('FGTS Rescisorio na Guia')]);
+        const [b, v] = /rescis/i.test(tipo) ? ['baseRescisoria', 'valorRescisorio'] : /\b13o\b|13º/i.test(tipo) ? ['base13', 'valor13'] : ['baseMensal', 'valorMensal'];
+        out[b] += base;
+        out[v] += valor;
+        out.total += valor;
+    });
+    out.synced = true;
+    audit.add('FGTS Digital', 'info', 'Coluna GFD (Governo) do FGTS lida do TiposDeValor',
+        `Mensal ${formatCurrency(out.valorMensal)} | 13º ${formatCurrency(out.valor13)} | Rescisório ${formatCurrency(out.valorRescisorio)} | Total ${formatCurrency(out.total)}`);
+
+    // Desligados não entram na guia mensal: o FGTS do mês deles vai na GRRF (quitação → mensal, 13º rescisão → 13º).
+    // A GRRF não traz base; ela é estimada por valor ÷ alíquota (2% aprendiz Z, 8% demais).
+    if (audit.grrfTrabalhadores.length) {
+        const g = { quitacao: 0, rescisao13: 0 };
+        audit.grrfTrabalhadores.forEach(t => {
+            const aliq = (t.codtipo === 'Z' ? (state.config.fgtsJovem || 2) : (state.config.fgts || 8)) / 100;
+            out.baseMensal += t.quitacao / aliq;
+            out.base13 += t.rescisao13 / aliq;
+            g.quitacao += t.quitacao;
+            g.rescisao13 += t.rescisao13;
+        });
+        out.valorMensal += g.quitacao;
+        out.valor13 += g.rescisao13;
+        out.total += g.quitacao + g.rescisao13;
+        audit.add('FGTS Digital', 'info', `GRRF do mês somada à coluna GFD (${audit.grrfTrabalhadores.length} desligado(s))`,
+            `FGTS quitação ${formatCurrency(g.quitacao)} no mensal | FGTS 13º rescisão ${formatCurrency(g.rescisao13)} no 13º | bases estimadas por valor ÷ alíquota`);
+    }
+    return out;
+}
+
+// Cruza, por nome, o retorno do FGTS Digital ("..._Trabalhadores.csv") com a Planilha de Bases:
+// base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL;
+// valor = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF.
+function buildComparacaoFgtsDigital(audit, arquivo, csvText) {
+    const lines = parseFgtsDigitalCsv(csvText);
+    const header = lines[0] || [];
+    const col = name => header.indexOf(name);
+    const required = ['Nome Trabalhador', 'Base Remuneracao Total', 'Valor FGTS na Guia'];
+    const missing = required.filter(name => col(name) === -1);
+    if (missing.length) {
+        audit.add('FGTS Digital', 'error', `Colunas ausentes em ${arquivo}: ${missing.join(', ')}`, 'Comparação FGTS Digital × Planilha não realizada');
+        return [];
+    }
+    const num = parseFgtsDigitalNum;
+    // FGTS Digital grava nomes sem acento ("PALACIOS") e a Planilha com ("PALÁCIOS").
+    const nameKey = nome => auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+    const guia = new Map();
+    lines.slice(1).forEach(r => {
+        // Depósito rescisório (multa) não está nas colunas da Planilha; só o mensal entra na comparação.
+        if (/rescis/i.test(r[col('Tipo Deposito')] || '')) return;
+        const key = nameKey(r[col('Nome Trabalhador')]);
+        const acc = guia.get(key) || { nome: r[col('Nome Trabalhador')], base: 0, fgts: 0 };
+        acc.base += num(r[col('Base Remuneracao Total')]);
+        acc.fgts += num(r[col('Valor FGTS na Guia')]);
+        guia.set(key, acc);
+    });
+    const planilha = new Map();
+    audit.planilhaRows.forEach(r => {
+        const key = nameKey(r.nome);
+        const acc = planilha.get(key) || { nome: r.nome, situacao: String(r.situacao || '').toUpperCase(), base: 0, fgts: 0 };
+        acc.base += r.baseFgts + r.baseFgtsAv + r.baseFgts13Av + r.baseFgts13 + (r.baseFgtsDifSal || 0);
+        acc.fgts += r.fgtsValor || 0;
+        planilha.set(key, acc);
+    });
+
+    // Desligados saem da guia mensal: o FGTS do mês deles (quitação + 13º rescisão) vai na GRRF.
+    const grrf = new Map(audit.grrfTrabalhadores.map(t => [nameKey(t.nome), t.quitacao + t.rescisao13]));
+    const d = (x, y) => Math.round(((x || 0) - (y || 0)) * 100) / 100 + 0;
+    const result = [];
+    new Set([...guia.keys(), ...planilha.keys()]).forEach(key => {
+        const g = guia.get(key), p = planilha.get(key);
+        // Sem FGTS na Planilha e fora da guia (ex.: pró-labore): nada a comparar.
+        if (!g && Math.abs(p.base) < 0.01 && Math.abs(p.fgts) < 0.01) return;
+        const item = {
+            nome: (g || p).nome,
+            basePlanilha: p ? p.base : null, baseGuia: g ? g.base : null,
+            fgtsPlanilha: p ? p.fgts : null, fgtsGuia: g ? g.fgts : null
+        };
+        item.difBase = d(item.basePlanilha, item.baseGuia);
+        item.difFgts = d(item.fgtsPlanilha, item.fgtsGuia);
+        const pagoGrrf = !g && grrf.has(key) && Math.abs(p.fgts - grrf.get(key)) <= AUDIT_TOLERANCE;
+        item.status = !p ? 'Só no FGTS Digital' : pagoGrrf ? 'Pago na GRRF' : !g && p.situacao === 'P' ? 'Afastado' : !g ? 'Só na Planilha'
+            : Math.abs(item.difBase) >= 0.01 || Math.abs(item.difFgts) > AUDIT_TOLERANCE ? 'Divergente' : 'Confere';
+        result.push(item);
+    });
+    const order = { 'Divergente': 0, 'Só no FGTS Digital': 1, 'Só na Planilha': 2, 'Afastado': 3, 'Pago na GRRF': 4, 'Confere': 5 };
+    result.sort((x, y) => order[x.status] - order[y.status] || Math.abs(y.difFgts) - Math.abs(x.difFgts));
+
+    const count = status => result.filter(r => r.status === status).length;
+    audit.add('FGTS Digital', result.length === count('Confere') + count('Pago na GRRF') ? 'info' : 'warning',
+        `FGTS Digital × Planilha: ${count('Confere')} conferem, ${count('Pago na GRRF')} pagos na GRRF, ${count('Afastado')} afastados fora da guia, ${count('Divergente')} divergentes, ${count('Só no FGTS Digital')} só no FGTS Digital, ${count('Só na Planilha')} só na Planilha`,
+        `${guia.size} trabalhadores em ${arquivo} × ${planilha.size} colaboradores na Planilha`);
     return result;
 }
 
@@ -3154,7 +3425,7 @@ function buildDivergencias(conciliacao, audit) {
 
             if (difGov !== null) {
                 const quem = p !== null ? 'Planilha' : 'Analítico';
-                const fonteGov = /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
+                const fonteGov = tributo === 'FGTS' ? 'FGTS Digital' : /DCTF/.test(governo.origem) || (key === 'total' && governo.origemTotal === 'DCTFWeb') ? 'DCTFWeb' : 'eSocial';
                 const descMenosCalc = governo.segDescontado != null && governo.segCalculado != null ? governo.segDescontado - governo.segCalculado : null;
                 if (key === 'segurados' && descMenosCalc !== null && Math.abs(descMenosCalc) >= 0.01 && near(difGov, descMenosCalc)) {
                     motivos.push(`${quem} − eSocial = ${formatCurrency(difGov)}: igual à diferença entre o INSS descontado pela folha (${formatCurrency(governo.segDescontado)}) e o calculado pelo eSocial (${formatCurrency(governo.segCalculado)}). A folha descontou ${formatCurrency(descMenosCalc)} a ${descMenosCalc > 0 ? 'mais' : 'menos'} do que o devido; o código 1082 usa o valor calculado.`);
@@ -3260,6 +3531,19 @@ function renderConciliacaoLog() {
                 <th style="text-align:right">Base INSS Analítico (mensal + 13º)</th><th style="text-align:right">Base INSS Planilha (mensal + 13º)</th><th style="text-align:right">Dif. INSS</th>
                 <th style="text-align:right">FGTS Analítico</th><th style="text-align:right">FGTS Planilha</th><th style="text-align:right">Dif. FGTS</th>
                 <th style="text-align:right">Dif. FGTS 13º</th><th style="text-align:right">INSS desc. Analítico</th><th style="text-align:right">INSS desc. Planilha</th><th style="text-align:right">Dif. INSS desc.</th><th>Origem</th></tr></thead><tbody id="auditCompRows"></tbody></table>`, true)}
+        ${audit.fgtsDigital.length === 0 ? '' : section('2b. FGTS Digital × Planilha (por trabalhador)', audit.fgtsDigital.filter(c => !['Confere', 'Pago na GRRF'].includes(c.status)).length,
+            `<p style="font-size:0.8rem; color:var(--text-muted); margin:8px 0">Base = BASEFGTS + BASEFGTSAVPREVIO + BASEFGTS13AVPREVIO + BASEFGTS13 + BASEFGTSDIFSAL · FGTS = FGTS_MES + FGTS_AVISO + FGTS13_AVISO + FGTS13 + FGTSDIF. Lista só as divergências (${audit.fgtsDigital.filter(c => c.status === 'Confere').length} conferem, ${audit.fgtsDigital.filter(c => c.status === 'Pago na GRRF').length} pagos na GRRF).</p>
+            <table class="data-table"><thead><tr><th>Status</th><th>Nome</th>
+                <th style="text-align:right">Base Planilha</th><th style="text-align:right">Base FGTS Digital</th><th style="text-align:right">Dif. Base</th>
+                <th style="text-align:right">FGTS Planilha</th><th style="text-align:right">FGTS na Guia</th><th style="text-align:right">Dif. FGTS</th></tr></thead><tbody>${
+                audit.fgtsDigital.filter(c => !['Confere', 'Pago na GRRF'].includes(c.status)).map(c => `<tr>
+                    <td style="color:${c.status === 'Divergente' ? 'var(--accent-red)' : 'var(--accent-orange)'}; font-weight:600">${escapeHtml(c.status)}</td>
+                    <td>${escapeHtml(c.nome)}</td>
+                    <td style="text-align:right; ${mono}">${money(c.basePlanilha)}</td><td style="text-align:right; ${mono}">${money(c.baseGuia)}</td>
+                    <td style="text-align:right; ${mono}; color:${Math.abs(c.difBase) >= 0.01 ? 'var(--accent-red)' : 'var(--text-muted)'}">${formatCurrency(c.difBase)}</td>
+                    <td style="text-align:right; ${mono}">${money(c.fgtsPlanilha)}</td><td style="text-align:right; ${mono}">${money(c.fgtsGuia)}</td>
+                    <td style="text-align:right; ${mono}; color:${Math.abs(c.difFgts) >= 0.01 ? 'var(--accent-red)' : 'var(--text-muted)'}">${formatCurrency(c.difFgts)}</td>
+                </tr>`).join('') || '<tr><td colspan="8" style="color:var(--accent-green)">Todos os trabalhadores conferem.</td></tr>'}</tbody></table>`, true)}
         ${section('3. Origem dos valores do Analítico', usedCaptures.length, `<table class="data-table"><thead><tr><th>Campo</th><th style="text-align:right">Valor</th><th>Arquivo : linha</th><th>Trecho lido</th><th style="text-align:center">Regra</th></tr></thead><tbody>${analiticoRows}</tbody></table>`)}
         ${section('4. Leitura da Planilha de Bases (colunas)', null, `<table class="data-table"><thead><tr><th>Arquivo</th><th>Campo</th><th style="text-align:center">Coluna</th><th>Cabeçalho encontrado</th></tr></thead><tbody>${columnRows}</tbody></table>`)}
         ${section('5. Memória de cálculo', audit.formulas.length, `<table class="data-table"><thead><tr><th>Fonte</th><th>Métrica</th><th>Fórmula / origem</th><th style="text-align:right">Valor</th></tr></thead><tbody>${formulaRows}</tbody></table>`)}
@@ -3834,8 +4118,9 @@ function excluirDadosCompetencia() {
     showLoading('Limpando dados da competência...');
     
     setTimeout(() => {
-            // Reset files
+            // Reset files (inclusive os guardados no navegador)
             state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
+            idbFiles('delete', getCompKey(state.competencia)).catch(() => {});
             
             // Reset validations
             state.validations.forEach(v => {
@@ -3868,7 +4153,7 @@ function excluirDadosCompetencia() {
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos
-            ['planilha', 'pdf', 'encargos'].forEach(id => {
+            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(id => {
                 const input = document.getElementById(`input-${id}`);
                 if (input) input.value = '';
             });
