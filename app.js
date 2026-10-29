@@ -380,16 +380,8 @@ async function bootstrapAuthenticatedApp() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Inicializa autenticação
-    const authInitialized = await initAuth();
-    if (!authInitialized) {
-        // Não carregar UI se não autenticado - login já foi mostrado
-        debugLog('app.initialized', { outcome: 'unauthenticated' });
-        return;
-    }
-
-    // Inicializa a interface (depois de autenticado)
-    await bootstrapAuthenticatedApp();
+    // Formulários de login/cadastro e navegação ligados antes de tudo: sem sessão, a tela de login precisa funcionar.
+    setupAuthForms();
 
     // Listener global para navegação
     document.addEventListener('click', (e) => {
@@ -401,8 +393,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Configura formulários de autenticação
-    setupAuthForms();
+    // Inicializa autenticação
+    const authInitialized = await initAuth();
+    if (!authInitialized) {
+        // Não carregar UI se não autenticado - login já foi mostrado
+        debugLog('app.initialized', { outcome: 'unauthenticated' });
+        return;
+    }
+
+    // Inicializa a interface (depois de autenticado)
+    await bootstrapAuthenticatedApp();
 
     debugLog('app.initialized', { outcome: 'ready' });
 });
