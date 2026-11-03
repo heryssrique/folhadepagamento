@@ -82,8 +82,11 @@ const state = {
         inss: [],
         fgts: [],
         irrf: [],
-        desligados: []
+        desligados: [],
+        consignado: []
     },
+    // Nome original e contratos por chave do consignado (a chave normalizada não é exibível).
+    consignadoDetalhe: {},
     layoutResults: {
         analitico: { 
             ok: false, 
@@ -243,7 +246,8 @@ function loadCompetenciaData(comp) {
     };
     state.validations.forEach(v => { v.status = 'pending'; v.progress = 0; });
     state.fechamentoSteps.forEach((s, i) => { s.status = i === 0 ? 'active' : 'locked'; });
-    state.conciliacao = { inss: [], fgts: [], irrf: [], desligados: [] };
+    state.conciliacao = { inss: [], fgts: [], irrf: [], desligados: [], consignado: [] };
+    state.consignadoDetalhe = {};
     state.files = { planilha: [], pdf: [], ponto: null, encargos: null };
     state.layoutResults = {
         analitico: { ok: false, fields: { 'PRO LABORE': false, 'Proventos': false, 'Descontos': false, 'Base FGTS': false, 'Base FGTS 13º': false, 'Base INSS - Envelope': false, 'Base INSS 13º - Envelope': false, 'INSS': false, 'INSS DIRETOR/AUT': false, 'INSS 13 SALARIO': false, 'IRRF': false } },
@@ -501,15 +505,23 @@ function routeFilesAutomatically(fileList) {
     const files = Array.from(fileList);
     if (!files.length) return;
 
-    const routed = { pdf: [], planilha: null, encargos: null, esocial: null, dctf: null };
+    const routed = { pdf: [], planilha: null, encargos: null, esocial: null, dctf: null, consignado: null, emprestimosRM: null };
     const extensions = files.map(file => String(file.name || '').split('.').pop().toLowerCase());
 
     files.forEach(file => {
         const name = file.name.toLowerCase();
         const ext  = name.split('.').pop();
 
+        // Consignado antes da regra de encargos: a guia do FGTS Digital do consignado
+        // também casa com /fgts|guia/ e iria para o card da GRRF.
+        if (/consignado/i.test(name) && ext === 'pdf') {
+            routed.consignado = file;
+        }
+        else if (/emprestimo|empréstimo|consignado/i.test(name) && (ext === 'xlsx' || ext === 'xls')) {
+            routed.emprestimosRM = file;
+        }
         // Planilha de Bases/Confronto: deve alimentar a conciliação, não o analítico
-        if (/base|bases|confronto/i.test(name) && (ext === 'xlsx' || ext === 'xls' || ext === 'csv')) {
+        else if (/base|bases|confronto/i.test(name) && (ext === 'xlsx' || ext === 'xls' || ext === 'csv')) {
             routed.planilha = file;
         }
         // eSocial (resumo S-5011) e DCTFWeb em Excel têm cards próprios
@@ -557,6 +569,8 @@ function routeFilesAutomatically(fileList) {
     if (routed.encargos) state.files.encargos = routed.encargos;
     if (routed.esocial) state.files.esocial = routed.esocial;
     if (routed.dctf) state.files.dctf = routed.dctf;
+    if (routed.consignado) state.files.consignado = routed.consignado;
+    if (routed.emprestimosRM) state.files.emprestimosRM = routed.emprestimosRM;
 
     // Toast descritivo
     const parts = [];
@@ -565,12 +579,17 @@ function routeFilesAutomatically(fileList) {
     if (routed.encargos)    parts.push('1 GRRF');
     if (routed.esocial)     parts.push('1 eSocial');
     if (routed.dctf)        parts.push('1 DCTFWeb');
+    if (routed.consignado)  parts.push('1 Guia Consignado');
+    if (routed.emprestimosRM) parts.push('1 Empréstimos RM');
     showToast(`✅ ${parts.join(', ')} classificado(s) automaticamente`, 'success');
 
     renderFilePreviews();
     checkUploadProgress();
     persistFiles();
     saveState();
+
+    // A conferência do consignado não depende do analítico, então roda já no upload.
+    if (routed.consignado || routed.emprestimosRM) processConsignado();
 }
 
 
@@ -2102,6 +2121,7 @@ async function processFiles() {
         showView('validacao', document.querySelector('[data-view=validacao]'));
         runAllValidations();
         renderConciliacao(); // Garante que as tabelas e a guia sejam renderizadas com os novos dados
+        processConsignado(); // Independente do analítico; só roda se os arquivos estiverem carregados
         saveState();
         debugLog('process.finished', { outcome: 'success' });
 
@@ -3660,13 +3680,14 @@ function renderConciliacao() {
     renderIRRF();
     renderFGTS();
     renderDesligados();
+    renderConsignado();
     renderConciliacaoLog();
 }
 
 // Diferença máxima aceita entre Planilha/Analítico e o governo, tratada como arredondamento.
 const GOV_ROUNDING_TOLERANCE = 1.00;
 
-function renderDynamicTable(type, metrics) {
+function renderDynamicTable(type, metrics, firstColLabel = 'Métrica / Rubrica') {
     const dataArray = state.conciliacao[type.toLowerCase()];
     const thead = document.getElementById(`head${type}`);
     const tbody = document.getElementById(`body${type}`);
@@ -3690,7 +3711,7 @@ function renderDynamicTable(type, metrics) {
     const isActive = (s, v) => v !== null && v !== undefined && (!isGov(s) || (s.synced === undefined ? v > 0 : s.synced));
 
     // Cabeçalho dinâmico baseado nas fontes disponíveis
-    let headHtml = `<tr><th style="width:30%; padding:12px 16px; text-align:left; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">Métrica / Rubrica</th>`;
+    let headHtml = `<tr><th style="width:30%; padding:12px 16px; text-align:left; font-weight:600; color:var(--text-primary); border-bottom:1px solid var(--border)">${firstColLabel}</th>`;
     sources.forEach(s => {
         let title = s.origem;
         if (title.includes('Analítico')) title = 'Analítico (Folha)';
@@ -3761,6 +3782,218 @@ function renderDynamicTable(type, metrics) {
         statusBadge.className = `badge ${badge[0]}`;
         statusBadge.innerText = badge[1];
     }
+}
+
+// ===== Consignado: guia do FGTS Digital x desconto em folha (RM) =====
+// A guia traz uma linha por contrato de empréstimo; o RM traz o desconto total por
+// trabalhador. A conferência soma os contratos e compara nome a nome, porque o RM não
+// exporta CPF — o nome normalizado é a única chave de ligação entre os dois arquivos.
+
+// auditNameKey() descarta o acento junto com a letra (JOSÉ -> JOS). Aqui os nomes vêm de
+// fontes diferentes, que podem divergir na acentuação, então dobramos o acento antes.
+function consignadoChave(nome) {
+    return auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+}
+
+// Este PDF sai do FGTS Digital em paisagem (page.rotate = 90): a linha visual compartilha
+// transform[4] e a coluna é transform[5], ao contrário de um PDF normal.
+function consignadoLinhasDeItens(itens, rotacionado) {
+    const linhas = [];
+    itens.forEach(item => {
+        if (!item.str || !item.str.trim()) return;
+        const posLinha = rotacionado ? item.transform[4] : item.transform[5];
+        const posColuna = rotacionado ? item.transform[5] : item.transform[4];
+        let linha = linhas.find(l => Math.abs(l.pos - posLinha) < 4);
+        if (!linha) linhas.push(linha = { pos: posLinha, itens: [] });
+        linha.itens.push({ pos: posColuna, str: item.str });
+    });
+    // Rotacionado, transform[4] cresce para baixo; em retrato, transform[5] cresce para cima.
+    linhas.sort((a, b) => rotacionado ? a.pos - b.pos : b.pos - a.pos);
+    return linhas.map(linha => linha.itens
+        .sort((a, b) => a.pos - b.pos)
+        .map(i => i.str).join(' ').replace(/\s+/g, ' ').trim());
+}
+
+// COMPETÊNCIA · VENCIMENTO · NOME · MATRÍCULA · CPF · Nº DO CONTRATO · INSTITUIÇÃO · VALOR
+const RE_CONSIGNADO_CONTRATO = /^(\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\S+)\s+(\d{3}\.\d{3}\.\d{3}-\d{2})\s+(\S+)\s+(\d{3})\s+(\d{1,3}(?:\.\d{3})*,\d{2})$/;
+
+function parseGuiaConsignado(linhas) {
+    const guia = {
+        trabalhadores: {}, contratos: 0, total: 0,
+        totalImpresso: null, qtdImpressa: null, vencimento: '', competencia: ''
+    };
+
+    linhas.forEach(linha => {
+        const contrato = linha.match(RE_CONSIGNADO_CONTRATO);
+        if (contrato) {
+            const [, competencia, vencimento, nome, matricula, cpf, numero, instituicao, valor] = contrato;
+            const chave = consignadoChave(nome);
+            const trabalhador = guia.trabalhadores[chave] || (guia.trabalhadores[chave] = {
+                nome: nome.trim(), cpf, matricula, contratos: [], total: 0
+            });
+            const valorNum = parseFgtsDigitalNum(valor);
+            trabalhador.contratos.push({ numero, instituicao, valor: valorNum });
+            trabalhador.total = Math.round((trabalhador.total + valorNum) * 100) / 100;
+            guia.contratos++;
+            guia.total = Math.round((guia.total + valorNum) * 100) / 100;
+            guia.competencia = guia.competencia || competencia;
+            guia.vencimento = guia.vencimento || vencimento;
+            return;
+        }
+        // "Total da Guia (FGTS + Consignado)" não casa aqui: só o total do consignado interessa.
+        const total = linha.match(/Total\s+Consignado\s+(\d{1,3}(?:\.\d{3})*,\d{2})/i);
+        if (total) guia.totalImpresso = parseFgtsDigitalNum(total[1]);
+        const qtd = linha.match(/Qtd\.?\s*Trabalhadores\s*Consignado:?\s*(\d+)/i);
+        if (qtd) guia.qtdImpressa = parseInt(qtd[1], 10);
+    });
+
+    return guia;
+}
+
+// Export do RM: cabeçalho CODCOLIGADA | NOME | CODSITUACAO | <tipo>, uma linha por trabalhador
+// e uma linha "N Total". Lido com raw:true, então os valores já vêm numéricos — o "R$ 1,023.09"
+// que aparece na planilha é só formato de exibição.
+function parseEmprestimosRM(rows) {
+    const folha = { trabalhadores: {}, total: 0, totalImpresso: null, competencia: '' };
+    const idxCabecalho = rows.findIndex(r => (r || []).some(c => /^NOME$/i.test(String(c).trim())));
+    if (idxCabecalho < 0) return folha;
+
+    const cabecalho = rows[idxCabecalho];
+    const colNome = cabecalho.findIndex(c => /^NOME$/i.test(String(c).trim()));
+    // A coluna do desconto é a primeira após o nome que não é identificador (no modelo, "D").
+    const colValor = cabecalho.findIndex((c, i) => i > colNome
+        && String(c).trim() !== ''
+        && !/^(NOME|CODSITUACAO|CODCOLIGADA|CHAPA|CODPESSOA)$/i.test(String(c).trim()));
+    if (colValor < 0) return folha;
+
+    // A competência fica acima do cabeçalho, na célula sob o rótulo MESCOMP.
+    for (let i = 0; i < idxCabecalho; i++) {
+        const pos = (rows[i] || []).findIndex(c => /MESCOMP/i.test(String(c)));
+        if (pos >= 0 && rows[i + 1] && String(rows[i + 1][pos] || '').trim() !== '') {
+            folha.competencia = String(rows[i + 1][pos]).trim();
+        }
+    }
+
+    rows.slice(idxCabecalho + 1).forEach(r => {
+        const linha = r || [];
+        const valor = Number(linha[colValor]);
+        if (linha[colValor] === '' || !Number.isFinite(valor)) return;
+        // A linha de total vem rotulada na primeira coluna ("4 Total").
+        if (/total/i.test(String(linha[0]))) {
+            folha.totalImpresso = Math.round(valor * 100) / 100;
+            return;
+        }
+        const nome = String(linha[colNome] || '').trim();
+        if (!nome) return;
+        const chave = consignadoChave(nome);
+        const trabalhador = folha.trabalhadores[chave] || (folha.trabalhadores[chave] = {
+            nome, situacao: String(linha[colNome + 1] || '').trim(), total: 0
+        });
+        trabalhador.total = Math.round((trabalhador.total + valor) * 100) / 100;
+        folha.total = Math.round((folha.total + valor) * 100) / 100;
+    });
+
+    return folha;
+}
+
+function conferirConsignado(guia, folha) {
+    const chaves = [...new Set([...Object.keys(guia.trabalhadores), ...Object.keys(folha.trabalhadores)])];
+    const detalhe = {};
+    chaves.forEach(chave => {
+        const naGuia = guia.trabalhadores[chave];
+        const naFolha = folha.trabalhadores[chave];
+        detalhe[chave] = {
+            nome: (naGuia || naFolha).nome,
+            cpf: naGuia ? naGuia.cpf : '',
+            contratos: naGuia ? naGuia.contratos.length : 0,
+            soGuia: !naFolha,
+            soFolha: !naGuia
+        };
+    });
+
+    // Quem falta de um lado entra com 0 (e não null) para a divergência acusar o valor inteiro.
+    const fonteGuia = { origem: 'Guia Consignado', total: guia.total };
+    const fonteFolha = { origem: 'Folha (RM)', total: folha.total };
+    chaves.forEach(chave => {
+        fonteGuia[chave] = guia.trabalhadores[chave] ? guia.trabalhadores[chave].total : 0;
+        fonteFolha[chave] = folha.trabalhadores[chave] ? folha.trabalhadores[chave].total : 0;
+    });
+
+    return { detalhe, fontes: [fonteGuia, fonteFolha] };
+}
+
+async function extractGuiaConsignado(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const linhas = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        linhas.push(...consignadoLinhasDeItens(content.items, page.rotate === 90 || page.rotate === 270));
+    }
+    return parseGuiaConsignado(linhas);
+}
+
+async function extractEmprestimosRM(file) {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    return parseEmprestimosRM(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }));
+}
+
+async function processConsignado() {
+    // Depois de recarregar a página os arquivos voltam como 'virtual' (só o nome foi persistido).
+    const legivel = f => f && f.type !== 'virtual' && typeof f.arrayBuffer === 'function';
+    const arquivoGuia = legivel(state.files.consignado) ? state.files.consignado : null;
+    const arquivoFolha = legivel(state.files.emprestimosRM) ? state.files.emprestimosRM : null;
+    if (!arquivoGuia && !arquivoFolha) return;
+
+    try {
+        const guia = arquivoGuia ? await extractGuiaConsignado(arquivoGuia) : null;
+        const folha = arquivoFolha ? await extractEmprestimosRM(arquivoFolha) : null;
+
+        // Se a leitura do PDF perder linhas, a conferência fica "certa" por acidente: avisa.
+        if (guia) {
+            const qtdLida = Object.keys(guia.trabalhadores).length;
+            if (guia.totalImpresso !== null && Math.abs(guia.total - guia.totalImpresso) >= 0.01) {
+                showToast(`⚠️ Guia do consignado: a soma dos contratos (${formatCurrency(guia.total)}) não fecha com o total impresso (${formatCurrency(guia.totalImpresso)}). Confira o PDF.`, 'error');
+            } else if (guia.qtdImpressa !== null && guia.qtdImpressa !== qtdLida) {
+                showToast(`⚠️ Guia do consignado: ${qtdLida} trabalhadores lidos, mas a guia informa ${guia.qtdImpressa}.`, 'warning');
+            }
+        }
+
+        if (guia && folha) {
+            const resultado = conferirConsignado(guia, folha);
+            state.consignadoDetalhe = resultado.detalhe;
+            state.conciliacao.consignado = resultado.fontes;
+        } else {
+            // Com um arquivo só não há o que conferir; a tabela mostra "aguardando importação".
+            state.consignadoDetalhe = {};
+            state.conciliacao.consignado = guia
+                ? [{ origem: 'Guia Consignado', total: guia.total }]
+                : [{ origem: 'Folha (RM)', total: folha.total }];
+        }
+
+        renderConsignado();
+        saveState();
+    } catch (error) {
+        console.error('Erro ao conferir o consignado:', error);
+        showToast(`Erro ao ler os arquivos do consignado: ${error.message}`, 'error');
+    }
+}
+
+function renderConsignado() {
+    const detalhe = state.consignadoDetalhe || {};
+    const chaves = Object.keys(detalhe).sort((a, b) => detalhe[a].nome.localeCompare(detalhe[b].nome, 'pt-BR'));
+    const metrics = chaves.map(chave => {
+        const t = detalhe[chave];
+        const nota = t.soGuia ? ' <span style="color:var(--accent-red)">(sem desconto na folha)</span>'
+            : t.soFolha ? ' <span style="color:var(--accent-red)">(não está na guia)</span>'
+            : ` <span style="color:var(--text-muted)">· ${t.contratos} contrato${t.contratos > 1 ? 's' : ''}</span>`;
+        return { label: escapeHtml(t.nome) + nota, key: chave };
+    });
+    metrics.push({ label: 'Total do consignado', key: 'total' });
+    renderDynamicTable('Consignado', metrics, 'Trabalhador');
 }
 
 function renderINSS() {

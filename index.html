@@ -711,6 +711,26 @@
           </div>
         </div>
 
+        <!-- Empréstimo consignado: guia do FGTS Digital x desconto em folha -->
+        <div class="card conciliacao-card" style="margin-top:24px">
+          <div class="card-header">
+            <div class="tax-info" style="display:flex;gap:12px;align-items:center">
+              <span class="tax-icon" style="font-size:1.5rem">🏦</span>
+              <div>
+                <h3 class="card-title">Empréstimo Consignado</h3>
+                <p class="card-subtitle" style="font-size:0.75rem;color:var(--text-muted)">Soma dos contratos da guia do FGTS Digital x desconto de cada trabalhador na folha (RM)</p>
+              </div>
+            </div>
+            <span class="badge badge-warning" id="statusConsignado">Pendente</span>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead id="headConsignado"></thead>
+              <tbody id="bodyConsignado"></tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- Log detalhado da conciliação -->
         <div class="card" style="margin-top:24px">
           <div class="card-header">
@@ -1020,7 +1040,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=42"></script>
+  <script src="app.js?v=43"></script>
 <script src="auth.js?v=3"></script>
 </body>
 </html>
