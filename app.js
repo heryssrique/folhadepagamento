@@ -1278,6 +1278,8 @@ async function processFiles() {
                         if ('inssSatAjustado' in rm) currentEmp.inssRat = rm.inssSatAjustado;
                         else if ('inssSat' in rm && !currentEmp.inssRat) currentEmp.inssRat = rm.inssSat;
                         if ('inssTerceiro' in rm) currentEmp.inssTerceiro = rm.inssTerceiro;
+                        // Desconto de empréstimo/consignado do analítico (por funcionário)
+                        if ('emprestimoConsignado' in rm) currentEmp.emprestimoConsignado = (currentEmp.emprestimoConsignado || 0) + rm.emprestimoConsignado;
                         // Sócio/diretor: rubricas de pró-labore ou INSS diretor (não confundir com o rótulo "Base INSS Pro-Labore").
                         if (/^\d{4}\s+[^\d]*PRO[\s-]+LABORE|\b\d{4}\s+INSS\s+DIRETOR/i.test(clean)) currentEmp.isCI = true;
                     }
@@ -2880,7 +2882,9 @@ const RM_FIELDS = [
     { id: 'inssSatAjustado', labels: ['INSS SAT Ajustado'] },
     { id: 'inssSat', labels: ['INSS SAT'] },
     { id: 'inssTerceiro', labels: ['INSS Terceiro', 'INSS Terceiros'] },
-    { id: 'inssSegurado', labels: ['INSS Segurado'] }
+    { id: 'inssSegurado', labels: ['INSS Segurado'] },
+    // Descontos de empréstimo/consignado do relatório analítico
+    { id: 'emprestimoConsignado', labels: ['Empréstimo Consignado', 'Consignado', 'Desconto Empréstimo', 'Desconto Consignado', 'Emprestimo Consignado', 'Empréstimo'] }
 ];
 
 // Troca cada caractere não-ASCII por "?" e padroniza espaços: o TXT latin-1 lido como UTF-8 vira "º"/"í"
@@ -3095,7 +3099,7 @@ function auditTraceAnalitico(audit, capture) {
 
 function auditStartEmployee(audit, { chapa, nome, file, line }) {
     const emp = { chapa, nome: nome.trim(), file, line, baseInss: 0, baseInss13: 0, baseFgts: 0, baseFgts13: 0, inssSegurado: 0,
-        inssEmpresa: 0, inssRat: 0, inssTerceiro: 0, isCI: false };
+        inssEmpresa: 0, inssRat: 0, inssTerceiro: 0, emprestimoConsignado: 0, isCI: false };
     audit.analiticoEmployees.push(emp);
     return emp;
 }
@@ -3896,14 +3900,15 @@ function parseEmprestimosRM(rows) {
     return folha;
 }
 
-function conferirConsignado(guia, folha) {
-    const chaves = [...new Set([...Object.keys(guia.trabalhadores), ...Object.keys(folha.trabalhadores)])];
+function conferirConsignado(guia, folha, analitico = null) {
+    const chaves = [...new Set([...Object.keys(guia.trabalhadores), ...Object.keys(folha.trabalhadores), ...(analitico ? Object.keys(analitico.trabalhadores) : [])])];
     const detalhe = {};
     chaves.forEach(chave => {
         const naGuia = guia.trabalhadores[chave];
         const naFolha = folha.trabalhadores[chave];
+        const noAnalitico = analitico ? analitico.trabalhadores[chave] : null;
         detalhe[chave] = {
-            nome: (naGuia || naFolha).nome,
+            nome: (naGuia || naFolha || noAnalitico).nome,
             cpf: naGuia ? naGuia.cpf : '',
             contratos: naGuia ? naGuia.contratos.length : 0,
             soGuia: !naFolha,
@@ -3914,12 +3919,35 @@ function conferirConsignado(guia, folha) {
     // Quem falta de um lado entra com 0 (e não null) para a divergência acusar o valor inteiro.
     const fonteGuia = { origem: 'Guia Consignado', total: guia.total };
     const fonteFolha = { origem: 'Folha (RM)', total: folha.total };
+    const fontes = [fonteGuia, fonteFolha];
     chaves.forEach(chave => {
         fonteGuia[chave] = guia.trabalhadores[chave] ? guia.trabalhadores[chave].total : 0;
         fonteFolha[chave] = folha.trabalhadores[chave] ? folha.trabalhadores[chave].total : 0;
     });
 
-    return { detalhe, fontes: [fonteGuia, fonteFolha] };
+    if (analitico) {
+        const fonteAnalitico = { origem: 'Relatório Analítico', total: analitico.total };
+        chaves.forEach(chave => {
+            fonteAnalitico[chave] = analitico.trabalhadores[chave] ? analitico.trabalhadores[chave].total : 0;
+        });
+        fontes.push(fonteAnalitico);
+    }
+
+    return { detalhe, fontes };
+}
+
+function buildAnaliticoConsignado(audit) {
+    const analitico = { trabalhadores: {}, total: 0 };
+    (audit && audit.analiticoEmployees ? audit.analiticoEmployees : []).forEach(emp => {
+        if (emp.emprestimoConsignado > 0) {
+            const key = consignadoChave(emp.nome);
+            const existente = analitico.trabalhadores[key] || { nome: emp.nome, total: 0 };
+            existente.total = Math.round((existente.total + emp.emprestimoConsignado) * 100) / 100;
+            analitico.trabalhadores[key] = existente;
+            analitico.total = Math.round((analitico.total + emp.emprestimoConsignado) * 100) / 100;
+        }
+    });
+    return analitico;
 }
 
 async function extractGuiaConsignado(file) {
