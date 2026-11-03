@@ -491,6 +491,52 @@
           </div>
         </div>
 
+        <!-- Guia do FGTS Digital — Consignado -->
+        <div class="upload-card" id="uploadCard-consignado">
+          <div class="upload-card-header">
+            <div class="upload-type-icon icon-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18M3 7h18M3 11h18M3 15h12M3 19h6"/></svg>
+            </div>
+            <div>
+              <h3>Guia Consignado (FGTS Digital)</h3>
+              <p>PDF com o detalhamento dos contratos de empréstimo consignado por trabalhador</p>
+            </div>
+            <div class="upload-status-icon" id="status-consignado" style="display:none">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+          </div>
+          <div class="dropzone" id="drop-consignado" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'consignado')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('consignado')">clique para selecionar</span></p>
+            <span class="file-hint">.pdf</span>
+            <div class="file-preview" id="preview-consignado"></div>
+          </div>
+          <input type="file" id="input-consignado" accept=".pdf" style="display:none" onchange="handleFileSelect(event,'consignado')" />
+        </div>
+
+        <!-- Empréstimos do RM — desconto em folha -->
+        <div class="upload-card" id="uploadCard-emprestimosRM">
+          <div class="upload-card-header">
+            <div class="upload-type-icon icon-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
+            <div>
+              <h3>Empréstimos RM (desconto em folha)</h3>
+              <p>Planilha do RM Labore com o valor de desconto de cada trabalhador (CODCOLIGADA | NOME | CODSITUACAO | D)</p>
+            </div>
+            <div class="upload-status-icon" id="status-emprestimosRM" style="display:none">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" width="22" height="22"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+          </div>
+          <div class="dropzone" id="drop-emprestimosRM" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event,'emprestimosRM')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <p>Arraste e solte ou <span class="link-text" onclick="triggerFileInput('emprestimosRM')">clique para selecionar</span></p>
+            <span class="file-hint">.xlsx, .xls</span>
+            <div class="file-preview" id="preview-emprestimosRM"></div>
+          </div>
+          <input type="file" id="input-emprestimosRM" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event,'emprestimosRM')" />
+        </div>
+
         <div class="card" style="margin-top:24px">
           <div class="card-header">
             <h3 class="card-title">Arquivos Carregados</h3>
@@ -1040,7 +1086,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=43"></script>
+  <script src="app.js?v=44"></script>
 <script src="auth.js?v=3"></script>
 </body>
 </html>
