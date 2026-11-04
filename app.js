@@ -4367,8 +4367,27 @@ function rateioNomeKey(nome) {
 }
 
 // rowsList: matrizes (header:1) de cada aba/arquivo da Planilha Auxiliar; fgtsCsv: texto do _Trabalhadores.csv (ou null).
-// opts.salarioFamilia: dedução da guia (mesma da conciliação), lançada numa linha à parte porque a
-// Planilha não traz o salário-família por colaborador.
+// Salário-família por colaborador no Analítico do RM (TXT ou PDF). O bloco de cada funcionário começa com
+// "00001934 - NOME  FUNÇÃO  Situação" (TXT) ou "00000795 NOME FUNÇÃO Situação" (PDF) e traz a rubrica
+// "1014 SALARIO FAMILIA <ref> <valor>". A linha de totais tem N.F. e Ref antes do valor e não casa aqui.
+// O texto após a chapa mistura nome e função; o nome é resolvido depois contra a Planilha Auxiliar.
+function extrairSalarioFamiliaAnalitico(text) {
+    const out = [];
+    let emp = null;
+    const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.')) || 0;
+    String(text || '').split('\n').forEach(line => {
+        const clean = line.trim().replace(/\s+/g, ' ');
+        const m = clean.match(/^(\d{6,}) (?:- )?([^\d\s].*)$/);
+        if (m) { emp = { chapa: m[1], texto: m[2] }; return; }
+        const s = clean.match(/\b1014 SALARIO FAMILIA [\d.,]+ ([\d.]+,\d{2})(?=( B)?( \d{4} \D|$))/i);
+        if (s && emp) out.push({ chapa: emp.chapa, texto: emp.texto, valor: parse(s[1]) });
+    });
+    return out;
+}
+
+// opts.salarioFamilia: total deduzido da guia na conciliação.
+// opts.salarioFamiliaColab: [{ chapa, texto, valor }] do Analítico — deduzido no centro de custo de cada um;
+// o que faltar para o total da conciliação vai numa linha "não identificado".
 function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
     const norm = s => String(s ?? '').toUpperCase().replace(/[\s_]+/g, '');
     const num = v => {
@@ -4381,7 +4400,9 @@ function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
     const ausentes = new Set();
     const centros = {};
     const ccPorNome = new Map();
-    const novoCentro = chave => centros[chave] || (centros[chave] = { centro: chave, colaboradores: 0, fgts: 0, ...Object.fromEntries(RATEIO_GRUPOS.map(g => [g.key, 0])) });
+    // Analítico do RM em TXT é latin-1 lido como UTF-8 ("JOS�"): para casar com ele, chave sem acentos removidos.
+    const ccPorNomeBruto = new Map();
+    const novoCentro = chave => centros[chave] || (centros[chave] = { centro: chave, colaboradores: 0, fgts: 0, salarioFamilia: 0, ...Object.fromEntries(RATEIO_GRUPOS.map(g => [g.key, 0])) });
     let achouPlanilha = false;
     // Diretor/sócio (CODTIPO D) é contribuinte individual: não há RAT nem Terceiros sobre o pró-labore,
     // embora a Planilha do RM traga esses valores na linha dele. A conciliação também os ignora.
@@ -4415,7 +4436,10 @@ function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
                 c[g.key] += v;
             });
             if (ci) ciIgnorado.colaboradores++;
-            if (nome) ccPorNome.set(rateioNomeKey(nome), c.centro);
+            if (nome) {
+                ccPorNome.set(rateioNomeKey(nome), c.centro);
+                ccPorNomeBruto.set(auditNameKey(nome), { centro: c.centro, nome });
+            }
         });
     });
     if (!achouPlanilha) return { erro: 'Coluna CCUSTO não encontrada na Planilha Auxiliar. Envie a Planilha de Bases do RM em Upload de Arquivos.' };
@@ -4446,23 +4470,41 @@ function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
         }
     }
 
+    // Salário-família: o texto após a chapa é "NOME FUNÇÃO ..."; vale o nome da Planilha mais longo que o inicia.
+    const nomesPlanilha = [...ccPorNomeBruto.keys()].sort((a, b) => b.length - a.length);
+    const sf = { colaboradores: [], naoLocalizados: [], identificado: 0, naoIdentificado: 0, totalConciliacao: r2(opts.salarioFamilia || 0) };
+    (opts.salarioFamiliaColab || []).forEach(t => {
+        const texto = auditNameKey(t.texto);
+        const key = nomesPlanilha.find(k => texto === k || texto.startsWith(k + ' '));
+        const achado = key ? ccPorNomeBruto.get(key) : null;
+        novoCentro(achado ? achado.centro : RATEIO_SEM_CC).salarioFamilia += t.valor;
+        sf.identificado += t.valor;
+        const item = { chapa: t.chapa, nome: achado ? achado.nome : t.texto, centro: achado ? achado.centro : null, valor: r2(t.valor) };
+        sf.colaboradores.push(item);
+        if (!achado) sf.naoLocalizados.push(item);
+    });
+    sf.identificado = r2(sf.identificado);
+    // Total da conciliação maior que o encontrado por colaborador: a diferença fica numa linha à parte.
+    sf.naoIdentificado = r2(Math.max(0, sf.totalConciliacao - sf.identificado));
+
     const linhas = Object.values(centros).map(c => {
         RATEIO_GRUPOS.forEach(g => { c[g.key] = r2(c[g.key]); });
         c.fgts = r2(c.fgts);
-        c.totalInss = r2(c.inssSegurado + c.inssEmpresa + c.rat + c.terceiros);
+        c.salarioFamilia = r2(c.salarioFamilia);
+        c.totalInss = r2(c.inssSegurado + c.inssEmpresa + c.rat + c.terceiros - c.salarioFamilia);
         return c;
     }).sort((a, b) => (a.centro === RATEIO_SEM_CC) - (b.centro === RATEIO_SEM_CC) || a.centro.localeCompare(b.centro, 'pt-BR'));
     const total = { centro: 'TOTAL' };
-    ['colaboradores', 'fgts', 'totalInss', ...RATEIO_GRUPOS.map(g => g.key)].forEach(k => { total[k] = r2(linhas.reduce((s, l) => s + l[k], 0)); });
+    ['colaboradores', 'fgts', 'salarioFamilia', 'totalInss', ...RATEIO_GRUPOS.map(g => g.key)].forEach(k => { total[k] = r2(linhas.reduce((s, l) => s + l[k], 0)); });
     linhas.forEach(l => { l.pctInss = total.totalInss ? l.totalInss / total.totalInss : 0; });
     total.pctInss = total.totalInss ? 1 : 0;
     // Guia INSS = soma dos centros − salário-família (mesma regra do Total Guia INSS da conciliação).
-    const salarioFamilia = r2(opts.salarioFamilia || 0);
     total.totalInssCentros = total.totalInss;
-    total.totalInss = r2(total.totalInss - salarioFamilia);
+    total.salarioFamilia = r2(total.salarioFamilia + sf.naoIdentificado);
+    total.totalInss = r2(total.totalInss - sf.naoIdentificado);
     ciIgnorado.rat = r2(ciIgnorado.rat);
     ciIgnorado.terceiros = r2(ciIgnorado.terceiros);
-    return { linhas, total, salarioFamilia, ciIgnorado, ausentes: [...ausentes], fgts };
+    return { linhas, total, salarioFamilia: sf, ciIgnorado, ausentes: [...ausentes], fgts };
 }
 
 // Valores da conciliação de INSS (coluna Planilha Auxiliar) usados para fechar o rateio com a guia.
@@ -4497,8 +4539,22 @@ async function carregarRateio() {
         }
         const fgtsCsv = fgtsFile ? (await readFgtsDigital(fgtsFile)).trabalhadores : null;
         const conc = rateioReferenciaConciliacao();
-        state.rateio = { ...calcularRateioCC(rowsList, fgtsCsv, { salarioFamilia: conc.salarioFamilia }), conciliacao: conc,
-            arquivos: planilhas.map(f => f.name), arquivoFgts: fgtsFile ? fgtsFile.name : null };
+        // Salário-família por colaborador: Analíticos em PDF/TXT; a mesma chapa em dois arquivos conta uma vez.
+        const analiticos = (state.files.pdf || []).filter(f => real(f) && /\.(pdf|txt)$/i.test(f.name));
+        const porChapa = new Map();
+        for (const file of analiticos) {
+            const text = /\.pdf$/i.test(file.name) ? await extractTextFromPDF(file) : await file.text();
+            const doArquivo = new Map();
+            extrairSalarioFamiliaAnalitico(text).forEach(t => {
+                const acc = doArquivo.get(t.chapa) || { ...t, valor: 0 };
+                acc.valor += t.valor;
+                doArquivo.set(t.chapa, acc);
+            });
+            doArquivo.forEach((t, chapa) => { if (!porChapa.has(chapa)) porChapa.set(chapa, t); });
+        }
+        state.rateio = { ...calcularRateioCC(rowsList, fgtsCsv, { salarioFamilia: conc.salarioFamilia, salarioFamiliaColab: [...porChapa.values()] }),
+            conciliacao: conc, arquivos: planilhas.map(f => f.name), arquivoFgts: fgtsFile ? fgtsFile.name : null,
+            arquivosAnalitico: analiticos.map(f => f.name) };
     } catch (e) {
         console.error('Erro ao montar o rateio por centro de custo:', e);
         state.rateio = { erro: 'Não foi possível ler os arquivos do Upload.', arquivos: planilhas.map(f => f.name) };
@@ -4520,16 +4576,17 @@ function renderRateio(res) {
     if (!res) {
         origem.textContent = 'Nenhuma Planilha Auxiliar em Upload de Arquivos.';
         status.textContent = 'Pendente'; status.className = 'badge badge-warning';
-        body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Envie a Planilha Auxiliar (Bases do RM) e o Retorno FGTS Digital em Upload de Arquivos.</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:24px">Envie a Planilha Auxiliar (Bases do RM) e o Retorno FGTS Digital em Upload de Arquivos.</td></tr>';
         return;
     }
-    origem.textContent = `INSS/IRRF: ${res.arquivos.join(', ')} · FGTS: ${res.arquivoFgts || 'Retorno FGTS Digital não enviado'} — Competência ${getCompetenciaExtenso()}`;
+    origem.textContent = `INSS/IRRF: ${res.arquivos.join(', ')} · Salário-família: ${(res.arquivosAnalitico || []).join(', ') || 'Analítico não enviado'} · FGTS: ${res.arquivoFgts || 'Retorno FGTS Digital não enviado'} — Competência ${getCompetenciaExtenso()}`;
     if (!ok) {
         status.textContent = 'Erro'; status.className = 'badge badge-danger';
-        body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px">${escapeRateio(res.erro || 'Nenhum colaborador encontrado.')}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:24px">${escapeRateio(res.erro || 'Nenhum colaborador encontrado.')}</td></tr>`;
         return;
     }
     status.textContent = `${res.linhas.length} centros de custo`; status.className = 'badge badge-success';
+    const conc0 = () => res.conciliacao || {};
     const msgs = [];
     if (!res.arquivoFgts) msgs.push('Retorno FGTS Digital não enviado em Upload de Arquivos: a coluna FGTS fica zerada.');
     if (res.fgts.erro) msgs.push(res.fgts.erro);
@@ -4539,10 +4596,22 @@ function renderRateio(res) {
     }
     if (res.ausentes.length) msgs.push(`Colunas ausentes na Planilha Auxiliar (consideradas zero): ${res.ausentes.join(', ')}.`);
     const infos = [];
+    const sf = res.salarioFamilia;
+    if (sf.colaboradores.length) {
+        infos.push(`Salário-família identificado no Analítico para ${sf.colaboradores.length} colaborador(es), deduzido no centro de custo de cada um: ${sf.colaboradores.map(t => `${t.nome} (${formatCurrency(t.valor)})`).join('; ')}.`);
+    }
+    if (sf.naoLocalizados.length) {
+        msgs.push(`${sf.naoLocalizados.length} colaborador(es) com salário-família no Analítico sem nome correspondente na Planilha Auxiliar, deduzidos na linha "${RATEIO_SEM_CC}": ${sf.naoLocalizados.map(t => `${t.chapa} ${t.nome} (${formatCurrency(t.valor)})`).join('; ')}.`);
+    }
+    if (sf.naoIdentificado > 0) {
+        msgs.push(`Salário-família da conciliação (${formatCurrency(sf.totalConciliacao)}) maior que o identificado por colaborador no Analítico (${formatCurrency(sf.identificado)}): ${formatCurrency(sf.naoIdentificado)} deduzidos sem centro de custo, na linha antes do TOTAL. Envie o Analítico em PDF ou TXT para identificar os colaboradores.`);
+    } else if (sf.identificado - sf.totalConciliacao > 0.05 && conc0().processada) {
+        msgs.push(`Salário-família identificado por colaborador (${formatCurrency(sf.identificado)}) maior que o deduzido na conciliação (${formatCurrency(sf.totalConciliacao)}). Confira o Analítico.`);
+    }
     if (res.ciIgnorado.colaboradores) {
         infos.push(`RAT (${formatCurrency(res.ciIgnorado.rat)}) e Terceiros (${formatCurrency(res.ciIgnorado.terceiros)}) da linha de ${res.ciIgnorado.colaboradores} diretor(es)/sócio(s) (CODTIPO D) não entram: contribuinte individual não recolhe RAT nem Terceiros, como na conciliação.`);
     }
-    const conc = res.conciliacao || {};
+    const conc = conc0();
     if (!conc.processada) {
         msgs.push('Folha ainda não processada: rode o processamento para o rateio descontar o salário-família e conferir com o Total Guia INSS da conciliação.');
     } else if (conc.totalPlanilha !== null) {
@@ -4568,12 +4637,12 @@ function renderRateio(res) {
     avisos.innerHTML = msgs.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(245,158,11,.12);color:var(--accent-orange, #b45309);font-size:.8rem">⚠️ ${escapeRateio(m)}</div>`).join('')
         + infos.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(14,165,233,.10);color:var(--text-secondary, inherit);font-size:.8rem">ℹ️ ${escapeRateio(m)}</div>`).join('');
     const cel = v => `<td style="text-align:right;white-space:nowrap">${formatCurrency(v)}</td>`;
-    const linha = (l, strong) => `<tr${strong ? ' style="font-weight:700"' : ''}><td>${escapeRateio(l.centro)}</td><td style="text-align:right">${l.colaboradores}</td>${cel(l.inssSegurado)}${cel(l.inssEmpresa)}${cel(l.rat)}${cel(l.terceiros)}${cel(l.totalInss)}${cel(l.fgts)}${cel(l.irrf)}<td style="text-align:right">${(l.pctInss * 100).toFixed(2).replace('.', ',')}%</td></tr>`;
+    const linha = (l, strong) => `<tr${strong ? ' style="font-weight:700"' : ''}><td>${escapeRateio(l.centro)}</td><td style="text-align:right">${l.colaboradores}</td>${cel(l.inssSegurado)}${cel(l.inssEmpresa)}${cel(l.rat)}${cel(l.terceiros)}${cel(l.salarioFamilia ? -l.salarioFamilia : 0)}${cel(l.totalInss)}${cel(l.fgts)}${cel(l.irrf)}<td style="text-align:right">${(l.pctInss * 100).toFixed(2).replace('.', ',')}%</td></tr>`;
     body.innerHTML = res.linhas.map(l => linha(l, false)).join('');
-    const sf = res.salarioFamilia
-        ? `<tr><td colspan="6">(−) Salário-família (deduzido da guia; a Planilha não traz por colaborador)</td>${cel(-res.salarioFamilia)}<td></td><td></td><td></td></tr>`
+    const semCC = sf.naoIdentificado
+        ? `<tr><td colspan="6">(−) Salário-família não identificado por colaborador no Analítico</td>${cel(-sf.naoIdentificado)}${cel(-sf.naoIdentificado)}<td></td><td></td><td></td></tr>`
         : '';
-    foot.innerHTML = sf + linha(res.total, true);
+    foot.innerHTML = semCC + linha(res.total, true);
 }
 
 function escapeRateio(s) {
@@ -4581,9 +4650,10 @@ function escapeRateio(s) {
 }
 
 function rateioParaLinhas(res) {
-    const cab = ['Centro de Custo', 'Colaboradores', ...RATEIO_GRUPOS.slice(0, 4).map(g => g.label), 'Total INSS', 'FGTS', 'IRRF', '% INSS'];
-    const val = l => [l.centro, l.colaboradores, l.inssSegurado, l.inssEmpresa, l.rat, l.terceiros, l.totalInss, l.fgts, l.irrf, Math.round(l.pctInss * 10000) / 100];
-    const sf = res.salarioFamilia ? [['(−) Salário-família', '', '', '', '', '', -res.salarioFamilia, '', '', '']] : [];
+    const cab = ['Centro de Custo', 'Colaboradores', ...RATEIO_GRUPOS.slice(0, 4).map(g => g.label), '(-) Salário-família', 'Total INSS', 'FGTS', 'IRRF', '% INSS'];
+    const val = l => [l.centro, l.colaboradores, l.inssSegurado, l.inssEmpresa, l.rat, l.terceiros, l.salarioFamilia ? -l.salarioFamilia : 0, l.totalInss, l.fgts, l.irrf, Math.round(l.pctInss * 10000) / 100];
+    const n = res.salarioFamilia.naoIdentificado;
+    const sf = n ? [['(-) Salário-família não identificado por colaborador', '', '', '', '', '', -n, -n, '', '', '']] : [];
     return [cab, ...res.linhas.map(val), ...sf, val(res.total)];
 }
 
@@ -4591,7 +4661,7 @@ function exportarRateioExcel() {
     const res = state.rateio;
     if (!res || res.erro) return;
     const ws = XLSX.utils.aoa_to_sheet(rateioParaLinhas(res));
-    ws['!cols'] = [{ wch: 45 }, { wch: 12 }, ...Array(8).fill({ wch: 15 })];
+    ws['!cols'] = [{ wch: 45 }, { wch: 12 }, ...Array(9).fill({ wch: 15 })];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Rateio CC');
     XLSX.writeFile(wb, `rateio-centro-custo-${state.competencia}.xlsx`);

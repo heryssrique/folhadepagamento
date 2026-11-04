@@ -29,15 +29,27 @@ test('rateio por centro de custo: INSS/IRRF da Planilha Auxiliar, FGTS do FGTS D
             'C SOUZA;Mensal;1.000,00;80,00',
             'FULANO EXTRA;Mensal;500,00;40,00'
         ].join('\\n');
-        const res = calcularRateioCC([planilha], csv, { salarioFamilia: 10 });
+        const sfColab = extrairSalarioFamiliaAnalitico([
+            '00001934 - JOS� PAL�CIOS                  SERVI�OS GERAIS       Ativo',
+            '1001 DIAS TRABALHADOS        30   2.354,01   2009 DESCONTO ADIANTAMENTO    0   941,60',
+            '1014 SALARIO FAMILIA          1      67,54   2075 INSS                     9   163,14',
+            '00000795   C   SOUZA   FAXINEIRA   (O)   Ativo',
+            '1014   SALARIO   FAMILIA 1  20,26',
+            '00000999 FULANO SEM PLANILHA AJUDANTE Ativo',
+            '1014 SALARIO FAMILIA 1 5,00 B',
+            'TOTAIS FOLHA GERAL',
+            '1014   SALARIO   FAMILIA 3 3  92,80 2017   DESCONTO',
+            '1014   SALARIO   FAMILIA 3 3,00  92,80 2017   DESCONTO'
+        ].join('\\n'));
+        assert.deepEqual(sfColab.map(t => [t.chapa, t.valor]), [['00001934', 67.54], ['00000795', 20.26], ['00000999', 5]]);
+        const res = calcularRateioCC([planilha], csv, { salarioFamilia: 100, salarioFamiliaColab: sfColab });
         assert.equal(res.erro, undefined);
         const x = res.linhas.find(l => l.centro === 'Obra X');
         assert.equal(x.colaboradores, 2);
         assert.equal(x.fgts, 300);              // do FGTS Digital, não do FGTS_MES da planilha
         assert.equal(x.inssSegurado, 115);
         assert.equal(x.irrf, 23);
-        assert.equal(x.totalInss, 115 + 90 + 15 + 23);
-        assert.equal(res.total.fgts, 420);
+                assert.equal(res.total.fgts, 420);
         assert.equal(res.fgts.total, 420);
         assert.equal(res.fgts.naoLocalizados.length, 1);
         assert.equal(res.linhas[res.linhas.length - 1].centro, RATEIO_SEM_CC);
@@ -48,8 +60,16 @@ test('rateio por centro de custo: INSS/IRRF da Planilha Auxiliar, FGTS do FGTS D
         assert.equal(fin.inssEmpresa, 220);
         assert.equal(res.ciIgnorado.rat, 9);
         assert.equal(res.ciIgnorado.terceiros, 13);
-        assert.equal(res.total.totalInssCentros, 243 + (30 + 20 + 3 + 6) + (100 + 200));
-        assert.equal(res.total.totalInss, res.total.totalInssCentros - 10);
+        // Salário-família deduzido no centro de cada colaborador; o que falta para a conciliação fica sem centro.
+        assert.equal(x.salarioFamilia, 67.54);
+        assert.equal(x.totalInss, Math.round((243 - 67.54) * 100) / 100);
+        assert.equal(fin.salarioFamilia, 20.26);
+        assert.equal(res.salarioFamilia.naoLocalizados.length, 1);
+        assert.equal(res.linhas.find(l => l.centro === RATEIO_SEM_CC).salarioFamilia, 5);
+        assert.equal(res.salarioFamilia.identificado, 92.8);
+        assert.equal(res.salarioFamilia.naoIdentificado, 7.2);
+        assert.equal(res.total.salarioFamilia, 100);
+        assert.equal(res.total.totalInss, Math.round((243 + 59 + 300 - 100) * 100) / 100);
 
         const semFgts = calcularRateioCC([planilha], null);
         assert.equal(semFgts.total.fgts, 0);
