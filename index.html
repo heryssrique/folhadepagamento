@@ -615,21 +615,20 @@
         <div class="view-header">
           <div>
             <h1 class="view-title">Rateio por Centro de Custo</h1>
-            <p class="view-subtitle">INSS, FGTS e IRRF da Planilha de Bases agrupados por centro de custo para lançamento no RM</p>
+            <p class="view-subtitle">INSS e IRRF da Planilha Auxiliar e FGTS do Retorno FGTS Digital, agrupados por centro de custo para lançamento no RM</p>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-secondary" onclick="document.getElementById('input-rateio').click()">Carregar Planilha de Bases</button>
+            <button class="btn btn-secondary" onclick="showView('upload', document.querySelector('[data-view=upload]'))">Upload de Arquivos</button>
             <button class="btn btn-secondary" id="btnCopiarRateio" onclick="copiarRateio()" disabled>Copiar tabela</button>
             <button class="btn btn-primary" id="btnExportarRateio" onclick="exportarRateioExcel()" disabled>Exportar Excel</button>
           </div>
-          <input type="file" id="input-rateio" accept=".xlsx,.xls" style="display:none" onchange="handleRateioFile(event)" />
         </div>
 
         <div class="card">
           <div class="card-header">
             <div>
               <h3 class="card-title">Valores por centro de custo</h3>
-              <p class="card-subtitle" id="rateioOrigem" style="font-size:0.75rem;color:var(--text-muted)">Nenhuma Planilha de Bases carregada.</p>
+              <p class="card-subtitle" id="rateioOrigem" style="font-size:0.75rem;color:var(--text-muted)">Nenhuma Planilha Auxiliar em Upload de Arquivos.</p>
             </div>
             <span class="badge badge-warning" id="rateioStatus">Pendente</span>
           </div>
@@ -651,7 +650,7 @@
                 </tr>
               </thead>
               <tbody id="bodyRateio">
-                <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Carregue a Planilha de Bases (aqui ou no Upload) para ver o rateio.</td></tr>
+                <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Envie a Planilha Auxiliar (Bases do RM) e o Retorno FGTS Digital em Upload de Arquivos.</td></tr>
               </tbody>
               <tfoot id="footRateio"></tfoot>
             </table>
@@ -1139,7 +1138,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=45"></script>
+  <script src="app.js?v=46"></script>
 <script src="auth.js?v=3"></script>
 </body>
 </html>

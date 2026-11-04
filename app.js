@@ -4344,94 +4344,124 @@ function showValidationDetails(id) {
 }
 
 // --- Rateio por Centro de Custo (INSS / FGTS / IRRF) ---
-// Cada grupo soma as colunas da Planilha de Bases (RM) listadas; nomes comparados sem espaço/underscore.
+// INSS e IRRF vêm da Planilha Auxiliar (Bases do RM, coluna CCUSTO); FGTS vem do Retorno do FGTS Digital
+// ("..._Trabalhadores.csv"), que não tem centro de custo: cada trabalhador é ligado ao CCUSTO da
+// Planilha Auxiliar pelo nome (sem acento). Colunas da planilha comparadas sem espaço/underscore.
 const RATEIO_GRUPOS = [
     { key: 'inssSegurado', label: 'INSS Segurado', cols: ['INSS', 'INSS13', 'INSSFERIAS', 'INSSDIFSAL'] },
     { key: 'inssEmpresa', label: 'INSS Empresa', cols: ['INSS EMPRESA'] },
     { key: 'rat', label: 'RAT', cols: ['INSS RAT AJUSTADO'] },
     { key: 'terceiros', label: 'Terceiros', cols: ['INSS TERCEIROS'] },
-    { key: 'fgts', label: 'FGTS', cols: ['FGTS_MES', 'FGTS_AVISO', 'FGTS13_AVISO', 'FGTS13', 'FGTSDIF'] },
     { key: 'irrf', label: 'IRRF', cols: ['IRRF', 'IRRF13', 'IRRFFERIAS'] }
 ];
+const RATEIO_SEM_CC = '(Não localizado na Planilha Auxiliar)';
 
-function calcularRateioCC(rows) {
+function rateioNomeKey(nome) {
+    return auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+}
+
+// rowsList: matrizes (header:1) de cada aba/arquivo da Planilha Auxiliar; fgtsCsv: texto do _Trabalhadores.csv (ou null).
+function calcularRateioCC(rowsList, fgtsCsv) {
     const norm = s => String(s ?? '').toUpperCase().replace(/[\s_]+/g, '');
-    const hIdx = rows.findIndex(r => (r || []).some(c => norm(c) === 'CCUSTO'));
-    if (hIdx < 0) return { erro: 'Coluna CCUSTO não encontrada. Use a Planilha de Bases do RM.' };
-    const header = rows[hIdx].map(norm);
-    const colCC = header.indexOf('CCUSTO');
-    const colNome = header.indexOf('NOME');
-    const colGuia = header.indexOf('TOTALGUIA');
     const num = v => {
         if (typeof v === 'number') return v;
         const s = String(v ?? '').trim();
         if (!s) return 0;
         return parseFloat(s.replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
     };
-    const ausentes = [];
-    const grupos = RATEIO_GRUPOS.map(g => {
-        const idx = g.cols.map(c => header.indexOf(norm(c)));
-        g.cols.forEach((c, i) => { if (idx[i] < 0) ausentes.push(c); });
-        return { ...g, idx: idx.filter(i => i >= 0) };
-    });
-    const centros = {};
-    let totalGuia = 0;
-    rows.slice(hIdx + 1).forEach(r => {
-        if (!r) return;
-        const nome = colNome >= 0 ? String(r[colNome] ?? '').trim() : '';
-        const cc = String(r[colCC] ?? '').trim();
-        if (!nome && !cc) return;
-        if (/total/i.test(nome) && !cc) return; // linha de totais
-        const chave = cc || '(Sem centro de custo)';
-        const c = centros[chave] || (centros[chave] = { centro: chave, colaboradores: 0 });
-        c.colaboradores++;
-        grupos.forEach(g => { c[g.key] = (c[g.key] || 0) + g.idx.reduce((s, i) => s + num(r[i]), 0); });
-        if (colGuia >= 0) totalGuia += num(r[colGuia]);
-    });
     const r2 = v => Math.round((v || 0) * 100) / 100;
+    const ausentes = new Set();
+    const centros = {};
+    const ccPorNome = new Map();
+    const novoCentro = chave => centros[chave] || (centros[chave] = { centro: chave, colaboradores: 0, fgts: 0, ...Object.fromEntries(RATEIO_GRUPOS.map(g => [g.key, 0])) });
+    let totalGuia = null;
+    let achouPlanilha = false;
+
+    (rowsList || []).forEach(rows => {
+        const hIdx = rows.findIndex(r => (r || []).some(c => norm(c) === 'CCUSTO'));
+        if (hIdx < 0) return;
+        achouPlanilha = true;
+        const header = rows[hIdx].map(norm);
+        const colCC = header.indexOf('CCUSTO');
+        const colNome = header.indexOf('NOME');
+        const colGuia = header.indexOf('TOTALGUIA');
+        const grupos = RATEIO_GRUPOS.map(g => {
+            const idx = g.cols.map(c => header.indexOf(norm(c)));
+            g.cols.forEach((c, i) => { if (idx[i] < 0) ausentes.add(c); });
+            return { ...g, idx: idx.filter(i => i >= 0) };
+        });
+        rows.slice(hIdx + 1).forEach(r => {
+            if (!r) return;
+            const nome = colNome >= 0 ? String(r[colNome] ?? '').trim() : '';
+            const cc = String(r[colCC] ?? '').trim();
+            if (!nome && !cc) return;
+            if (/total/i.test(nome) && !cc) return; // linha de totais
+            const c = novoCentro(cc || '(Sem centro de custo)');
+            c.colaboradores++;
+            grupos.forEach(g => { c[g.key] += g.idx.reduce((s, i) => s + num(r[i]), 0); });
+            if (colGuia >= 0) totalGuia = (totalGuia || 0) + num(r[colGuia]);
+            if (nome) ccPorNome.set(rateioNomeKey(nome), c.centro);
+        });
+    });
+    if (!achouPlanilha) return { erro: 'Coluna CCUSTO não encontrada na Planilha Auxiliar. Envie a Planilha de Bases do RM em Upload de Arquivos.' };
+
+    // FGTS: valor da guia por trabalhador, rateado pelo centro de custo do mesmo nome na Planilha Auxiliar.
+    const fgts = { lido: false, erro: null, naoLocalizados: [], total: 0 };
+    if (fgtsCsv) {
+        const lines = parseFgtsDigitalCsv(fgtsCsv);
+        const header = lines[0] || [];
+        const colNome = header.indexOf('Nome Trabalhador');
+        const colValor = header.indexOf('Valor FGTS na Guia');
+        if (colNome < 0 || colValor < 0) {
+            fgts.erro = 'Colunas "Nome Trabalhador" / "Valor FGTS na Guia" não encontradas no Retorno FGTS Digital.';
+        } else {
+            fgts.lido = true;
+            const semCC = new Map();
+            lines.slice(1).forEach(r => {
+                const nome = r[colNome];
+                const valor = parseFgtsDigitalNum(r[colValor]);
+                if (!nome && !valor) return;
+                const cc = ccPorNome.get(rateioNomeKey(nome));
+                novoCentro(cc || RATEIO_SEM_CC).fgts += valor;
+                fgts.total += valor;
+                if (!cc) semCC.set(nome, (semCC.get(nome) || 0) + valor);
+            });
+            fgts.naoLocalizados = [...semCC].map(([nome, valor]) => ({ nome, valor: r2(valor) }));
+            fgts.total = r2(fgts.total);
+        }
+    }
+
     const linhas = Object.values(centros).map(c => {
         RATEIO_GRUPOS.forEach(g => { c[g.key] = r2(c[g.key]); });
+        c.fgts = r2(c.fgts);
         c.totalInss = r2(c.inssSegurado + c.inssEmpresa + c.rat + c.terceiros);
         return c;
-    }).sort((a, b) => a.centro.localeCompare(b.centro, 'pt-BR'));
-    const total = { centro: 'TOTAL', colaboradores: 0 };
-    [...RATEIO_GRUPOS.map(g => g.key), 'totalInss'].forEach(k => { total[k] = r2(linhas.reduce((s, l) => s + l[k], 0)); });
-    total.colaboradores = linhas.reduce((s, l) => s + l.colaboradores, 0);
+    }).sort((a, b) => (a.centro === RATEIO_SEM_CC) - (b.centro === RATEIO_SEM_CC) || a.centro.localeCompare(b.centro, 'pt-BR'));
+    const total = { centro: 'TOTAL' };
+    ['colaboradores', 'fgts', 'totalInss', ...RATEIO_GRUPOS.map(g => g.key)].forEach(k => { total[k] = r2(linhas.reduce((s, l) => s + l[k], 0)); });
     linhas.forEach(l => { l.pctInss = total.totalInss ? l.totalInss / total.totalInss : 0; });
     total.pctInss = total.totalInss ? 1 : 0;
-    return { linhas, total, ausentes, totalGuia: colGuia >= 0 ? r2(totalGuia) : null };
+    return { linhas, total, ausentes: [...ausentes], totalGuia: totalGuia === null ? null : r2(totalGuia), fgts };
 }
 
-async function lerRateioArquivo(file) {
-    const wb = XLSX.read(await file.arrayBuffer());
-    for (const nome of wb.SheetNames) {
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[nome], { header: 1, raw: true, defval: '' });
-        const res = calcularRateioCC(rows);
-        if (!res.erro) return res;
-    }
-    return { erro: 'Coluna CCUSTO não encontrada em nenhuma aba. Use a Planilha de Bases do RM.' };
-}
-
-async function carregarRateio(arquivo) {
-    const file = arquivo || state.rateioArquivo
-        || (state.files.planilha || []).find(f => f && f.type !== 'virtual' && /base/i.test(f.name));
-    if (!file) { renderRateio(null); return; }
+async function carregarRateio() {
+    const real = f => f && f.type !== 'virtual';
+    const planilhas = (state.files.planilha || []).filter(f => real(f) && /\.xlsx?$/i.test(f.name));
+    const fgtsFile = real(state.files.fgtsDigital) ? state.files.fgtsDigital : null;
+    if (!planilhas.length) { state.rateio = null; renderRateio(null); return; }
     try {
-        const res = await lerRateioArquivo(file);
-        state.rateio = { ...res, arquivo: file.name };
+        const rowsList = [];
+        for (const file of planilhas) {
+            const wb = XLSX.read(await file.arrayBuffer());
+            wb.SheetNames.forEach(n => rowsList.push(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })));
+        }
+        const fgtsCsv = fgtsFile ? (await readFgtsDigital(fgtsFile)).trabalhadores : null;
+        state.rateio = { ...calcularRateioCC(rowsList, fgtsCsv), arquivos: planilhas.map(f => f.name), arquivoFgts: fgtsFile ? fgtsFile.name : null };
     } catch (e) {
-        console.error('Erro ao ler Planilha de Bases para rateio:', e);
-        state.rateio = { erro: 'Não foi possível ler o arquivo.', arquivo: file.name };
+        console.error('Erro ao montar o rateio por centro de custo:', e);
+        state.rateio = { erro: 'Não foi possível ler os arquivos do Upload.', arquivos: planilhas.map(f => f.name) };
     }
     renderRateio(state.rateio);
-}
-
-function handleRateioFile(event) {
-    const file = event.target.files && event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-    state.rateioArquivo = file;
-    carregarRateio(file);
 }
 
 function renderRateio(res) {
@@ -4446,12 +4476,12 @@ function renderRateio(res) {
     foot.innerHTML = '';
     avisos.innerHTML = '';
     if (!res) {
-        origem.textContent = 'Nenhuma Planilha de Bases carregada.';
+        origem.textContent = 'Nenhuma Planilha Auxiliar em Upload de Arquivos.';
         status.textContent = 'Pendente'; status.className = 'badge badge-warning';
-        body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Carregue a Planilha de Bases (aqui ou no Upload) para ver o rateio.</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Envie a Planilha Auxiliar (Bases do RM) e o Retorno FGTS Digital em Upload de Arquivos.</td></tr>';
         return;
     }
-    origem.textContent = `Arquivo: ${res.arquivo} — Competência ${getCompetenciaExtenso()}`;
+    origem.textContent = `INSS/IRRF: ${res.arquivos.join(', ')} · FGTS: ${res.arquivoFgts || 'Retorno FGTS Digital não enviado'} — Competência ${getCompetenciaExtenso()}`;
     if (!ok) {
         status.textContent = 'Erro'; status.className = 'badge badge-danger';
         body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px">${escapeRateio(res.erro || 'Nenhum colaborador encontrado.')}</td></tr>`;
@@ -4459,7 +4489,13 @@ function renderRateio(res) {
     }
     status.textContent = `${res.linhas.length} centros de custo`; status.className = 'badge badge-success';
     const msgs = [];
-    if (res.ausentes.length) msgs.push(`Colunas ausentes na planilha (consideradas zero): ${res.ausentes.join(', ')}.`);
+    if (!res.arquivoFgts) msgs.push('Retorno FGTS Digital não enviado em Upload de Arquivos: a coluna FGTS fica zerada.');
+    if (res.fgts.erro) msgs.push(res.fgts.erro);
+    if (res.fgts.naoLocalizados.length) {
+        const lista = res.fgts.naoLocalizados.map(t => `${t.nome} (${formatCurrency(t.valor)})`).join('; ');
+        msgs.push(`${res.fgts.naoLocalizados.length} trabalhador(es) do FGTS Digital sem nome correspondente na Planilha Auxiliar, lançados na linha "${RATEIO_SEM_CC}": ${lista}.`);
+    }
+    if (res.ausentes.length) msgs.push(`Colunas ausentes na Planilha Auxiliar (consideradas zero): ${res.ausentes.join(', ')}.`);
     if (res.totalGuia !== null && Math.abs(res.totalGuia - res.total.totalInss) > 0.05) {
         msgs.push(`Total INSS do rateio (${formatCurrency(res.total.totalInss)}) difere da coluna TOTAL GUIA (${formatCurrency(res.totalGuia)}).`);
     }
