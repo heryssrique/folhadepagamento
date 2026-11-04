@@ -160,7 +160,8 @@ function persistFiles() {
     idbFiles('put', getCompKey(state.competencia), {
         planilha: f.planilha.filter(real), pdf: f.pdf.filter(real),
         encargos: real(f.encargos) ? f.encargos : null, fgtsDigital: real(f.fgtsDigital) ? f.fgtsDigital : null,
-        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null
+        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null,
+        consignado: real(f.consignado) ? f.consignado : null, emprestimosRM: real(f.emprestimosRM) ? f.emprestimosRM : null
     }).catch(e => console.warn('Arquivos não guardados no navegador:', e));
 }
 
@@ -170,9 +171,12 @@ async function restoreStoredFiles() {
     try { saved = await idbFiles('get', getCompKey(state.competencia)); } catch (e) { return; }
     if (!saved) return;
     state.files = { planilha: saved.planilha || [], pdf: saved.pdf || [], ponto: null, encargos: saved.encargos,
-        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf };
+        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf,
+        consignado: saved.consignado || null, emprestimosRM: saved.emprestimosRM || null };
     renderFilePreviews();
     checkUploadProgress();
+    // A conferência do consignado não depende do processamento geral: refaz com os arquivos restaurados.
+    if (state.files.consignado || state.files.emprestimosRM) processConsignado();
 }
 
 async function saveState() {
@@ -421,7 +425,8 @@ function showView(viewId, element) {
         'fechamento': 'Fechamento da Folha',
         'relatorios': 'Relatórios',
         'configuracoes': 'Configurações',
-        'conciliacao': 'Conciliação de Encargos'
+        'conciliacao': 'Conciliação de Encargos',
+        'rateio': 'Rateio por Centro de Custo'
     };
     
     const breadcrumbEl = document.getElementById('breadcrumb');
@@ -451,6 +456,7 @@ function showView(viewId, element) {
         if (viewId === 'fechamento') renderFechamentoSteps();
         if (viewId === 'configuracoes') renderConfig();
         if (viewId === 'conciliacao') renderConciliacao();
+        if (viewId === 'rateio') carregarRateio();
     } catch (err) {
         console.error(`Erro ao renderizar view ${viewId}:`, err);
     }
@@ -625,7 +631,7 @@ function processUploadedFiles(fileList, type) {
 function renderFilePreviews() {
     // Update individual dropzone previews
     // Slots com arquivo único
-    ['encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(type => {
+    ['encargos', 'fgtsDigital', 'esocial', 'dctf', 'consignado', 'emprestimosRM'].forEach(type => {
         const file = state.files[type];
         const previewEl = document.getElementById(`preview-${type}`);
         const statusEl  = document.getElementById(`status-${type}`);
@@ -685,6 +691,8 @@ function renderFilePreviews() {
     if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
     if (state.files.esocial) allFileItems.push({ type: 'eSocial', file: state.files.esocial, key: 'esocial' });
     if (state.files.dctf) allFileItems.push({ type: 'DCTFWeb', file: state.files.dctf, key: 'dctf' });
+    if (state.files.consignado) allFileItems.push({ type: 'Guia Consignado', file: state.files.consignado, key: 'consignado' });
+    if (state.files.emprestimosRM) allFileItems.push({ type: 'Empréstimos RM', file: state.files.emprestimosRM, key: 'emprestimosRM' });
 
     if (allFileItems.length === 0) {
         html = `
@@ -4341,6 +4349,395 @@ function showValidationDetails(id) {
     modal.style.display = 'flex';
 }
 
+// --- Rateio por Centro de Custo (INSS / FGTS / IRRF) ---
+// INSS e IRRF vêm da Planilha Auxiliar (Bases do RM, coluna CCUSTO); FGTS vem do Retorno do FGTS Digital
+// ("..._Trabalhadores.csv"), que não tem centro de custo: cada trabalhador é ligado ao CCUSTO da
+// Planilha Auxiliar pelo nome (sem acento). Colunas da planilha comparadas sem espaço/underscore.
+const RATEIO_GRUPOS = [
+    { key: 'inssSegurado', label: 'INSS Segurado', cols: ['INSS', 'INSS13', 'INSSFERIAS', 'INSSDIFSAL'] },
+    { key: 'inssEmpresa', label: 'INSS Empresa', cols: ['INSS EMPRESA'] },
+    { key: 'rat', label: 'RAT', cols: ['INSS RAT AJUSTADO'] },
+    { key: 'terceiros', label: 'Terceiros', cols: ['INSS TERCEIROS'] },
+    { key: 'irrf', label: 'IRRF', cols: ['IRRF', 'IRRF13', 'IRRFFERIAS'] }
+];
+const RATEIO_SEM_CC = '(Não localizado na Planilha Auxiliar)';
+
+function rateioNomeKey(nome) {
+    return auditNameKey(String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, ''));
+}
+
+// rowsList: matrizes (header:1) de cada aba/arquivo da Planilha Auxiliar; fgtsCsv: texto do _Trabalhadores.csv (ou null).
+// Salário-família por colaborador no Analítico do RM (TXT ou PDF). O bloco de cada funcionário começa com
+// "00001934 - NOME  FUNÇÃO  Situação" (TXT) ou "00000795 NOME FUNÇÃO Situação" (PDF) e traz a rubrica
+// "1014 SALARIO FAMILIA <ref> <valor>". A linha de totais tem N.F. e Ref antes do valor e não casa aqui.
+// O texto após a chapa mistura nome e função; o nome é resolvido depois contra a Planilha Auxiliar.
+function extrairSalarioFamiliaAnalitico(text) {
+    const out = [];
+    let emp = null;
+    const parse = s => parseFloat(String(s).replace(/\./g, '').replace(',', '.')) || 0;
+    String(text || '').split('\n').forEach(line => {
+        const clean = line.trim().replace(/\s+/g, ' ');
+        const m = clean.match(/^(\d{6,}) (?:- )?([^\d\s].*)$/);
+        if (m) { emp = { chapa: m[1], texto: m[2] }; return; }
+        const s = clean.match(/\b1014 SALARIO FAMILIA [\d.,]+ ([\d.]+,\d{2})(?=( B)?( \d{4} \D|$))/i);
+        if (s && emp) out.push({ chapa: emp.chapa, texto: emp.texto, valor: parse(s[1]) });
+    });
+    return out;
+}
+
+// opts.salarioFamilia: total deduzido da guia na conciliação.
+// opts.salarioFamiliaColab: [{ chapa, texto, valor }] do Analítico — deduzido no centro de custo de cada um;
+// o que faltar para o total da conciliação vai numa linha "não identificado".
+function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
+    const norm = s => String(s ?? '').toUpperCase().replace(/[\s_]+/g, '');
+    const num = v => {
+        if (typeof v === 'number') return v;
+        const s = String(v ?? '').trim();
+        if (!s) return 0;
+        return parseFloat(s.replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
+    };
+    const r2 = v => Math.round((v || 0) * 100) / 100;
+    const ausentes = new Set();
+    const centros = {};
+    const ccPorNome = new Map();
+    // Analítico do RM em TXT é latin-1 lido como UTF-8 ("JOS�"): para casar com ele, chave sem acentos removidos.
+    const ccPorNomeBruto = new Map();
+    const novoCentro = chave => centros[chave] || (centros[chave] = { centro: chave, colaboradores: 0, fgts: 0, salarioFamilia: 0, ...Object.fromEntries(RATEIO_GRUPOS.map(g => [g.key, 0])) });
+    let achouPlanilha = false;
+    // Diretor/sócio (CODTIPO D) é contribuinte individual: não há RAT nem Terceiros sobre o pró-labore,
+    // embora a Planilha do RM traga esses valores na linha dele. A conciliação também os ignora.
+    const ciIgnorado = { colaboradores: 0, rat: 0, terceiros: 0 };
+
+    (rowsList || []).forEach(rows => {
+        const hIdx = rows.findIndex(r => (r || []).some(c => norm(c) === 'CCUSTO'));
+        if (hIdx < 0) return;
+        achouPlanilha = true;
+        const header = rows[hIdx].map(norm);
+        const colCC = header.indexOf('CCUSTO');
+        const colNome = header.indexOf('NOME');
+        const colTipo = header.indexOf('CODTIPO');
+        const grupos = RATEIO_GRUPOS.map(g => {
+            const idx = g.cols.map(c => header.indexOf(norm(c)));
+            g.cols.forEach((c, i) => { if (idx[i] < 0) ausentes.add(c); });
+            return { ...g, idx: idx.filter(i => i >= 0) };
+        });
+        rows.slice(hIdx + 1).forEach(r => {
+            if (!r) return;
+            const nome = colNome >= 0 ? String(r[colNome] ?? '').trim() : '';
+            const cc = String(r[colCC] ?? '').trim();
+            if (!nome && !cc) return;
+            if (/total/i.test(nome) && !cc) return; // linha de totais
+            const c = novoCentro(cc || '(Sem centro de custo)');
+            c.colaboradores++;
+            const ci = colTipo >= 0 && String(r[colTipo] ?? '').trim().toUpperCase() === 'D';
+            grupos.forEach(g => {
+                const v = g.idx.reduce((s, i) => s + num(r[i]), 0);
+                if (ci && (g.key === 'rat' || g.key === 'terceiros')) { ciIgnorado[g.key] += v; return; }
+                c[g.key] += v;
+            });
+            if (ci) ciIgnorado.colaboradores++;
+            if (nome) {
+                ccPorNome.set(rateioNomeKey(nome), c.centro);
+                ccPorNomeBruto.set(auditNameKey(nome), { centro: c.centro, nome });
+            }
+        });
+    });
+    if (!achouPlanilha) return { erro: 'Coluna CCUSTO não encontrada na Planilha Auxiliar. Envie a Planilha de Bases do RM em Upload de Arquivos.' };
+
+    // FGTS: valor da guia por trabalhador, rateado pelo centro de custo do mesmo nome na Planilha Auxiliar.
+    const fgts = { lido: false, erro: null, naoLocalizados: [], total: 0 };
+    if (fgtsCsv) {
+        const lines = parseFgtsDigitalCsv(fgtsCsv);
+        const header = lines[0] || [];
+        const colNome = header.indexOf('Nome Trabalhador');
+        const colValor = header.indexOf('Valor FGTS na Guia');
+        if (colNome < 0 || colValor < 0) {
+            fgts.erro = 'Colunas "Nome Trabalhador" / "Valor FGTS na Guia" não encontradas no Retorno FGTS Digital.';
+        } else {
+            fgts.lido = true;
+            const semCC = new Map();
+            lines.slice(1).forEach(r => {
+                const nome = r[colNome];
+                const valor = parseFgtsDigitalNum(r[colValor]);
+                if (!nome && !valor) return;
+                const cc = ccPorNome.get(rateioNomeKey(nome));
+                novoCentro(cc || RATEIO_SEM_CC).fgts += valor;
+                fgts.total += valor;
+                if (!cc) semCC.set(nome, (semCC.get(nome) || 0) + valor);
+            });
+            fgts.naoLocalizados = [...semCC].map(([nome, valor]) => ({ nome, valor: r2(valor) }));
+            fgts.total = r2(fgts.total);
+        }
+    }
+
+    // Salário-família: o texto após a chapa é "NOME FUNÇÃO ..."; vale o nome da Planilha mais longo que o inicia.
+    const nomesPlanilha = [...ccPorNomeBruto.keys()].sort((a, b) => b.length - a.length);
+    const sf = { colaboradores: [], naoLocalizados: [], identificado: 0, naoIdentificado: 0, totalConciliacao: r2(opts.salarioFamilia || 0) };
+    (opts.salarioFamiliaColab || []).forEach(t => {
+        const texto = auditNameKey(t.texto);
+        const key = nomesPlanilha.find(k => texto === k || texto.startsWith(k + ' '));
+        const achado = key ? ccPorNomeBruto.get(key) : null;
+        novoCentro(achado ? achado.centro : RATEIO_SEM_CC).salarioFamilia += t.valor;
+        sf.identificado += t.valor;
+        const item = { chapa: t.chapa, nome: achado ? achado.nome : t.texto, centro: achado ? achado.centro : null, valor: r2(t.valor) };
+        sf.colaboradores.push(item);
+        if (!achado) sf.naoLocalizados.push(item);
+    });
+    sf.identificado = r2(sf.identificado);
+    // Total da conciliação maior que o encontrado por colaborador: a diferença fica numa linha à parte.
+    sf.naoIdentificado = r2(Math.max(0, sf.totalConciliacao - sf.identificado));
+
+    const linhas = Object.values(centros).map(c => {
+        RATEIO_GRUPOS.forEach(g => { c[g.key] = r2(c[g.key]); });
+        c.fgts = r2(c.fgts);
+        c.salarioFamilia = r2(c.salarioFamilia);
+        c.totalInss = r2(c.inssSegurado + c.inssEmpresa + c.rat + c.terceiros - c.salarioFamilia);
+        return c;
+    }).sort((a, b) => (a.centro === RATEIO_SEM_CC) - (b.centro === RATEIO_SEM_CC) || a.centro.localeCompare(b.centro, 'pt-BR'));
+    const total = { centro: 'TOTAL' };
+    ['colaboradores', 'fgts', 'salarioFamilia', 'totalInss', ...RATEIO_GRUPOS.map(g => g.key)].forEach(k => { total[k] = r2(linhas.reduce((s, l) => s + l[k], 0)); });
+    linhas.forEach(l => { l.pctInss = total.totalInss ? l.totalInss / total.totalInss : 0; });
+    total.pctInss = total.totalInss ? 1 : 0;
+    // Guia INSS = soma dos centros − salário-família (mesma regra do Total Guia INSS da conciliação).
+    total.totalInssCentros = total.totalInss;
+    total.salarioFamilia = r2(total.salarioFamilia + sf.naoIdentificado);
+    total.totalInss = r2(total.totalInss - sf.naoIdentificado);
+    ciIgnorado.rat = r2(ciIgnorado.rat);
+    ciIgnorado.terceiros = r2(ciIgnorado.terceiros);
+    return { linhas, total, salarioFamilia: sf, ciIgnorado, ausentes: [...ausentes], fgts };
+}
+
+// Fecha o rateio com o eSocial (S-5011) componente a componente: a diferença de cada componente
+// (RM × eSocial) é distribuída entre os centros na proporção do valor de cada um (maior resto, ao
+// centavo). Só ajusta diferenças de arredondamento (até R$ 5,00 ou 0,1%); acima disso, apenas avisa.
+const RATEIO_TOLERANCIA_GOV = { valor: 5, pct: 0.001 };
+function ajustarRateioGoverno(res, gov) {
+    const num = v => typeof v === 'number' && Number.isFinite(v);
+    if (!res || res.erro || !gov || !gov.synced || !num(gov.segurados)) return res;
+    const r2 = v => Math.round((v || 0) * 100) / 100;
+    const alvos = [
+        ['inssSegurado', 'INSS Segurado', gov.segurados + (gov.seguradosCI || 0)],
+        ['inssEmpresa', 'INSS Empresa', (gov.patronal || 0) + (gov.patronalCI || 0)],
+        ['rat', 'RAT', gov.ratfap || 0],
+        ['terceiros', 'Terceiros', gov.terceiros || 0]
+    ];
+    res.ajusteGoverno = alvos.map(([key, label, alvo]) => {
+        const rm = r2(res.linhas.reduce((s, l) => s + l[key], 0));
+        alvo = r2(alvo);
+        const dif = r2(alvo - rm);
+        const tol = Math.max(RATEIO_TOLERANCIA_GOV.valor, Math.abs(alvo) * RATEIO_TOLERANCIA_GOV.pct);
+        const aplicado = dif !== 0 && Math.abs(dif) <= tol && rm !== 0;
+        if (aplicado) {
+            const cents = Math.round(dif * 100), sinal = Math.sign(cents), absC = Math.abs(cents);
+            const partes = res.linhas.map((l, i) => { const q = absC * l[key] / rm; return { i, base: Math.floor(q), frac: q - Math.floor(q) }; });
+            let resto = absC - partes.reduce((s, p) => s + p.base, 0);
+            [...partes].sort((a, b) => b.frac - a.frac).forEach(p => { if (resto > 0) { p.base++; resto--; } });
+            partes.forEach(p => { const l = res.linhas[p.i]; l[key] = r2(l[key] + sinal * p.base / 100); });
+        }
+        return { key, label, rm, governo: alvo, dif, aplicado, tolerancia: r2(tol) };
+    });
+    // Recalcula totais e percentuais com os componentes ajustados.
+    const t = res.total;
+    res.linhas.forEach(l => { l.totalInss = r2(l.inssSegurado + l.inssEmpresa + l.rat + l.terceiros - l.salarioFamilia); });
+    RATEIO_GRUPOS.forEach(g => { t[g.key] = r2(res.linhas.reduce((s, l) => s + l[g.key], 0)); });
+    t.totalInssCentros = r2(res.linhas.reduce((s, l) => s + l.totalInss, 0));
+    t.totalInss = r2(t.totalInssCentros - res.salarioFamilia.naoIdentificado);
+    res.linhas.forEach(l => { l.pctInss = t.totalInssCentros ? l.totalInss / t.totalInssCentros : 0; });
+    // Total do eSocial = componentes − salário-família; a guia da DCTFWeb pode ter deduções (retenção 11%, compensações).
+    res.totalGovernoESocial = r2(alvos.reduce((s, a) => s + a[2], 0) - (num(gov.salarioFamilia) ? gov.salarioFamilia : 0));
+    res.totalGovernoGuia = num(gov.total) ? r2(gov.total) : null;
+    res.origemGuiaGoverno = gov.origemTotal || 'eSocial';
+    return res;
+}
+
+// Valores da conciliação de INSS (coluna Planilha Auxiliar) usados para fechar o rateio com a guia.
+// Sem salário-família na Planilha, a conciliação desconta o do Analítico — o rateio faz o mesmo.
+function rateioReferenciaConciliacao() {
+    const fontes = (state.conciliacao && state.conciliacao.inss) || [];
+    const planilha = fontes.find(f => /Planilha/i.test(f.origem || ''));
+    const analitico = fontes.find(f => /Anal[ií]tico/i.test(f.origem || ''));
+    const governo = fontes.find(f => /Governo/i.test(f.origem || ''));
+    const valido = v => typeof v === 'number' && Number.isFinite(v);
+    const sf = planilha && valido(planilha.salarioFamilia) ? planilha.salarioFamilia
+        : analitico && valido(analitico.salarioFamilia) ? analitico.salarioFamilia : 0;
+    return {
+        processada: !!planilha,
+        salarioFamilia: sf,
+        totalPlanilha: planilha && valido(planilha.total) ? planilha.total : null,
+        totalGoverno: governo && valido(governo.total) ? governo.total : null,
+        planilha: planilha || null,
+        governo: governo || null
+    };
+}
+
+async function carregarRateio() {
+    const real = f => f && f.type !== 'virtual';
+    const planilhas = (state.files.planilha || []).filter(f => real(f) && /\.xlsx?$/i.test(f.name));
+    const fgtsFile = real(state.files.fgtsDigital) ? state.files.fgtsDigital : null;
+    if (!planilhas.length) { state.rateio = null; renderRateio(null); return; }
+    try {
+        const rowsList = [];
+        for (const file of planilhas) {
+            const wb = XLSX.read(await file.arrayBuffer());
+            wb.SheetNames.forEach(n => rowsList.push(XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })));
+        }
+        const fgtsCsv = fgtsFile ? (await readFgtsDigital(fgtsFile)).trabalhadores : null;
+        const conc = rateioReferenciaConciliacao();
+        // Salário-família por colaborador: Analíticos em PDF/TXT; a mesma chapa em dois arquivos conta uma vez.
+        const analiticos = (state.files.pdf || []).filter(f => real(f) && /\.(pdf|txt)$/i.test(f.name));
+        const porChapa = new Map();
+        for (const file of analiticos) {
+            const text = /\.pdf$/i.test(file.name) ? await extractTextFromPDF(file) : await file.text();
+            const doArquivo = new Map();
+            extrairSalarioFamiliaAnalitico(text).forEach(t => {
+                const acc = doArquivo.get(t.chapa) || { ...t, valor: 0 };
+                acc.valor += t.valor;
+                doArquivo.set(t.chapa, acc);
+            });
+            doArquivo.forEach((t, chapa) => { if (!porChapa.has(chapa)) porChapa.set(chapa, t); });
+        }
+        const gov = conc.governo && conc.governo.synced ? conc.governo : null;
+        const sfTotal = gov && typeof gov.salarioFamilia === 'number' ? gov.salarioFamilia : conc.salarioFamilia;
+        const calc = ajustarRateioGoverno(calcularRateioCC(rowsList, fgtsCsv, { salarioFamilia: sfTotal, salarioFamiliaColab: [...porChapa.values()] }), gov);
+        state.rateio = { ...calc,
+            conciliacao: conc, arquivos: planilhas.map(f => f.name), arquivoFgts: fgtsFile ? fgtsFile.name : null,
+            arquivosAnalitico: analiticos.map(f => f.name) };
+    } catch (e) {
+        console.error('Erro ao montar o rateio por centro de custo:', e);
+        state.rateio = { erro: 'Não foi possível ler os arquivos do Upload.', arquivos: planilhas.map(f => f.name) };
+    }
+    renderRateio(state.rateio);
+}
+
+function renderRateio(res) {
+    const body = document.getElementById('bodyRateio');
+    const foot = document.getElementById('footRateio');
+    const avisos = document.getElementById('rateioAvisos');
+    const origem = document.getElementById('rateioOrigem');
+    const status = document.getElementById('rateioStatus');
+    if (!body) return;
+    const ok = res && !res.erro && res.linhas.length > 0;
+    ['btnCopiarRateio', 'btnExportarRateio'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = !ok; });
+    foot.innerHTML = '';
+    avisos.innerHTML = '';
+    if (!res) {
+        origem.textContent = 'Nenhuma Planilha Auxiliar em Upload de Arquivos.';
+        status.textContent = 'Pendente'; status.className = 'badge badge-warning';
+        body.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted);padding:24px">Envie a Planilha Auxiliar (Bases do RM) e o Retorno FGTS Digital em Upload de Arquivos.</td></tr>';
+        return;
+    }
+    origem.textContent = `INSS/IRRF: ${res.arquivos.join(', ')} · Salário-família: ${(res.arquivosAnalitico || []).join(', ') || 'Analítico não enviado'} · FGTS: ${res.arquivoFgts || 'Retorno FGTS Digital não enviado'} — Competência ${getCompetenciaExtenso()}`;
+    if (!ok) {
+        status.textContent = 'Erro'; status.className = 'badge badge-danger';
+        body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:24px">${escapeRateio(res.erro || 'Nenhum colaborador encontrado.')}</td></tr>`;
+        return;
+    }
+    status.textContent = `${res.linhas.length} centros de custo`; status.className = 'badge badge-success';
+    const conc0 = () => res.conciliacao || {};
+    const msgs = [];
+    if (!res.arquivoFgts) msgs.push('Retorno FGTS Digital não enviado em Upload de Arquivos: a coluna FGTS fica zerada.');
+    if (res.fgts.erro) msgs.push(res.fgts.erro);
+    if (res.fgts.naoLocalizados.length) {
+        const lista = res.fgts.naoLocalizados.map(t => `${t.nome} (${formatCurrency(t.valor)})`).join('; ');
+        msgs.push(`${res.fgts.naoLocalizados.length} trabalhador(es) do FGTS Digital sem nome correspondente na Planilha Auxiliar, lançados na linha "${RATEIO_SEM_CC}": ${lista}.`);
+    }
+    if (res.ausentes.length) msgs.push(`Colunas ausentes na Planilha Auxiliar (consideradas zero): ${res.ausentes.join(', ')}.`);
+    const infos = [];
+    const sf = res.salarioFamilia;
+    if (sf.colaboradores.length) {
+        infos.push(`Salário-família identificado no Analítico para ${sf.colaboradores.length} colaborador(es), deduzido no centro de custo de cada um: ${sf.colaboradores.map(t => `${t.nome} (${formatCurrency(t.valor)})`).join('; ')}.`);
+    }
+    if (sf.naoLocalizados.length) {
+        msgs.push(`${sf.naoLocalizados.length} colaborador(es) com salário-família no Analítico sem nome correspondente na Planilha Auxiliar, deduzidos na linha "${RATEIO_SEM_CC}": ${sf.naoLocalizados.map(t => `${t.chapa} ${t.nome} (${formatCurrency(t.valor)})`).join('; ')}.`);
+    }
+    if (sf.naoIdentificado > 0) {
+        msgs.push(`Salário-família da conciliação (${formatCurrency(sf.totalConciliacao)}) maior que o identificado por colaborador no Analítico (${formatCurrency(sf.identificado)}): ${formatCurrency(sf.naoIdentificado)} deduzidos sem centro de custo, na linha antes do TOTAL. Envie o Analítico em PDF ou TXT para identificar os colaboradores.`);
+    } else if (sf.identificado - sf.totalConciliacao > 0.05 && conc0().processada) {
+        msgs.push(`Salário-família identificado por colaborador (${formatCurrency(sf.identificado)}) maior que o deduzido na conciliação (${formatCurrency(sf.totalConciliacao)}). Confira o Analítico.`);
+    }
+    if (res.ciIgnorado.colaboradores) {
+        infos.push(`RAT (${formatCurrency(res.ciIgnorado.rat)}) e Terceiros (${formatCurrency(res.ciIgnorado.terceiros)}) da linha de ${res.ciIgnorado.colaboradores} diretor(es)/sócio(s) (CODTIPO D) não entram: contribuinte individual não recolhe RAT nem Terceiros, como na conciliação.`);
+    }
+    const conc = conc0();
+    if (!conc.processada) {
+        msgs.push('Folha ainda não processada: rode o processamento para o rateio descontar o salário-família e conferir com o Total Guia INSS da conciliação.');
+    } else if (conc.totalPlanilha !== null && !res.ajusteGoverno) {
+        const dif = Math.round((res.total.totalInss - conc.totalPlanilha) * 100) / 100;
+        if (Math.abs(dif) <= 0.05) {
+            infos.push(`Total INSS confere com o Total Guia INSS da conciliação (Planilha Auxiliar): ${formatCurrency(conc.totalPlanilha)}.`);
+        } else {
+            const p = conc.planilha;
+            const t = res.total;
+            const partes = [
+                ['Segurados', t.inssSegurado, (p.segurados || 0) + (p.seguradosCI || 0)],
+                ['INSS Empresa', t.inssEmpresa, (p.patronal || 0) + (p.patronalCI || 0)],
+                ['RAT', t.rat, p.ratfap || 0],
+                ['Terceiros', t.terceiros, p.terceiros || 0]
+            ].filter(([, a, b]) => Math.abs(a - b) > 0.05)
+                .map(([n, a, b]) => `${n}: rateio ${formatCurrency(a)} × conciliação ${formatCurrency(b)}`);
+            msgs.push(`Total INSS do rateio (${formatCurrency(res.total.totalInss)}) difere do Total Guia INSS da conciliação (${formatCurrency(conc.totalPlanilha)}) em ${formatCurrency(dif)}. ${partes.join('; ')}. A conciliação calcula patronal, RAT e Terceiros pelas alíquotas de Configurações; o rateio usa os valores das colunas do RM — confira RAT/FAP e Terceiros em Configurações.`);
+        }
+    }
+    if (res.ajusteGoverno) {
+        const aplic = res.ajusteGoverno.filter(a => a.aplicado);
+        const fora = res.ajusteGoverno.filter(a => !a.aplicado && Math.abs(a.dif) > 0.004);
+        if (aplic.length) infos.push(`Ajuste de arredondamento para fechar com o eSocial, distribuído pelos centros na proporção de cada componente: ${aplic.map(a => `${a.label} RM ${formatCurrency(a.rm)} → eSocial ${formatCurrency(a.governo)} (${formatCurrency(a.dif)})`).join('; ')}.`);
+        if (fora.length) msgs.push(`Diferença acima da tolerância de arredondamento entre o RM e o eSocial — não ajustada, revise base/alíquota: ${fora.map(a => `${a.label} RM ${formatCurrency(a.rm)} × eSocial ${formatCurrency(a.governo)} (dif. ${formatCurrency(a.dif)}, tolerância ${formatCurrency(a.tolerancia)})`).join('; ')}.`);
+        const difES = Math.round((res.total.totalInss - res.totalGovernoESocial) * 100) / 100;
+        if (Math.abs(difES) <= 0.05) infos.push(`Total INSS confere com o eSocial (Governo): ${formatCurrency(res.totalGovernoESocial)}.`);
+        else if (!fora.length) msgs.push(`Total INSS do rateio (${formatCurrency(res.total.totalInss)}) difere do eSocial (${formatCurrency(res.totalGovernoESocial)}) em ${formatCurrency(difES)}: confira o salário-família.`);
+        if (res.totalGovernoGuia !== null && Math.abs(res.totalGovernoGuia - res.totalGovernoESocial) > 0.05) {
+            infos.push(`Guia INSS (${res.origemGuiaGoverno}) ${formatCurrency(res.totalGovernoGuia)} difere do total do eSocial em ${formatCurrency(Math.round((res.totalGovernoGuia - res.totalGovernoESocial) * 100) / 100)}: retenções de 11% sobre notas, compensações ou deduções — não são custo da folha e não entram no rateio (lançar em INSS a recuperar/compensar, sem centro de custo).`);
+        }
+    } else if (conc.totalGoverno !== null && conc.totalGoverno !== undefined && Math.abs(res.total.totalInss - conc.totalGoverno) > 0.05) {
+        infos.push(`Total Guia INSS do Governo na conciliação: ${formatCurrency(conc.totalGoverno)}. Importe o eSocial (S-5011) para o rateio fechar com ele.`);
+    }
+    avisos.innerHTML = msgs.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(245,158,11,.12);color:var(--accent-orange, #b45309);font-size:.8rem">⚠️ ${escapeRateio(m)}</div>`).join('')
+        + infos.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(14,165,233,.10);color:var(--text-secondary, inherit);font-size:.8rem">ℹ️ ${escapeRateio(m)}</div>`).join('');
+    const cel = v => `<td style="text-align:right;white-space:nowrap">${formatCurrency(v)}</td>`;
+    const linha = (l, strong) => `<tr${strong ? ' style="font-weight:700"' : ''}><td>${escapeRateio(l.centro)}</td><td style="text-align:right">${l.colaboradores}</td>${cel(l.inssSegurado)}${cel(l.inssEmpresa)}${cel(l.rat)}${cel(l.terceiros)}${cel(l.salarioFamilia ? -l.salarioFamilia : 0)}${cel(l.totalInss)}${cel(l.fgts)}${cel(l.irrf)}<td style="text-align:right">${(l.pctInss * 100).toFixed(2).replace('.', ',')}%</td></tr>`;
+    body.innerHTML = res.linhas.map(l => linha(l, false)).join('');
+    const semCC = sf.naoIdentificado
+        ? `<tr><td colspan="6">(−) Salário-família não identificado por colaborador no Analítico</td>${cel(-sf.naoIdentificado)}${cel(-sf.naoIdentificado)}<td></td><td></td><td></td></tr>`
+        : '';
+    foot.innerHTML = semCC + linha(res.total, true);
+}
+
+function escapeRateio(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function rateioParaLinhas(res) {
+    const cab = ['Centro de Custo', 'Colaboradores', ...RATEIO_GRUPOS.slice(0, 4).map(g => g.label), '(-) Salário-família', 'Total INSS', 'FGTS', 'IRRF', '% INSS'];
+    const val = l => [l.centro, l.colaboradores, l.inssSegurado, l.inssEmpresa, l.rat, l.terceiros, l.salarioFamilia ? -l.salarioFamilia : 0, l.totalInss, l.fgts, l.irrf, Math.round(l.pctInss * 10000) / 100];
+    const n = res.salarioFamilia.naoIdentificado;
+    const sf = n ? [['(-) Salário-família não identificado por colaborador', '', '', '', '', '', -n, -n, '', '', '']] : [];
+    return [cab, ...res.linhas.map(val), ...sf, val(res.total)];
+}
+
+function exportarRateioExcel() {
+    const res = state.rateio;
+    if (!res || res.erro) return;
+    const ws = XLSX.utils.aoa_to_sheet(rateioParaLinhas(res));
+    ws['!cols'] = [{ wch: 45 }, { wch: 12 }, ...Array(9).fill({ wch: 15 })];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Rateio CC');
+    XLSX.writeFile(wb, `rateio-centro-custo-${state.competencia}.xlsx`);
+}
+
+async function copiarRateio() {
+    const res = state.rateio;
+    if (!res || res.erro) return;
+    const br = v => typeof v === 'number' ? v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v;
+    const texto = rateioParaLinhas(res).map((r, i) => r.map((v, j) => (i === 0 || j <= 1) ? v : br(v)).join('\t')).join('\n');
+    try {
+        await navigator.clipboard.writeText(texto);
+        showToast('Tabela copiada. Cole no Excel ou use como referência no RM.', 'success');
+    } catch (_) {
+        showToast('Não foi possível copiar. Use "Exportar Excel".', 'error');
+    }
+}
+
 // --- Utils ---
 function formatCurrency(val) {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -4414,7 +4811,7 @@ function excluirDadosCompetencia() {
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos
-            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(id => {
+            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf', 'consignado', 'emprestimosRM'].forEach(id => {
                 const input = document.getElementById(`input-${id}`);
                 if (input) input.value = '';
             });
