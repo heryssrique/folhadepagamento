@@ -4507,6 +4507,49 @@ function calcularRateioCC(rowsList, fgtsCsv, opts = {}) {
     return { linhas, total, salarioFamilia: sf, ciIgnorado, ausentes: [...ausentes], fgts };
 }
 
+// Fecha o rateio com o eSocial (S-5011) componente a componente: a diferença de cada componente
+// (RM × eSocial) é distribuída entre os centros na proporção do valor de cada um (maior resto, ao
+// centavo). Só ajusta diferenças de arredondamento (até R$ 5,00 ou 0,1%); acima disso, apenas avisa.
+const RATEIO_TOLERANCIA_GOV = { valor: 5, pct: 0.001 };
+function ajustarRateioGoverno(res, gov) {
+    const num = v => typeof v === 'number' && Number.isFinite(v);
+    if (!res || res.erro || !gov || !gov.synced || !num(gov.segurados)) return res;
+    const r2 = v => Math.round((v || 0) * 100) / 100;
+    const alvos = [
+        ['inssSegurado', 'INSS Segurado', gov.segurados + (gov.seguradosCI || 0)],
+        ['inssEmpresa', 'INSS Empresa', (gov.patronal || 0) + (gov.patronalCI || 0)],
+        ['rat', 'RAT', gov.ratfap || 0],
+        ['terceiros', 'Terceiros', gov.terceiros || 0]
+    ];
+    res.ajusteGoverno = alvos.map(([key, label, alvo]) => {
+        const rm = r2(res.linhas.reduce((s, l) => s + l[key], 0));
+        alvo = r2(alvo);
+        const dif = r2(alvo - rm);
+        const tol = Math.max(RATEIO_TOLERANCIA_GOV.valor, Math.abs(alvo) * RATEIO_TOLERANCIA_GOV.pct);
+        const aplicado = dif !== 0 && Math.abs(dif) <= tol && rm !== 0;
+        if (aplicado) {
+            const cents = Math.round(dif * 100), sinal = Math.sign(cents), absC = Math.abs(cents);
+            const partes = res.linhas.map((l, i) => { const q = absC * l[key] / rm; return { i, base: Math.floor(q), frac: q - Math.floor(q) }; });
+            let resto = absC - partes.reduce((s, p) => s + p.base, 0);
+            [...partes].sort((a, b) => b.frac - a.frac).forEach(p => { if (resto > 0) { p.base++; resto--; } });
+            partes.forEach(p => { const l = res.linhas[p.i]; l[key] = r2(l[key] + sinal * p.base / 100); });
+        }
+        return { key, label, rm, governo: alvo, dif, aplicado, tolerancia: r2(tol) };
+    });
+    // Recalcula totais e percentuais com os componentes ajustados.
+    const t = res.total;
+    res.linhas.forEach(l => { l.totalInss = r2(l.inssSegurado + l.inssEmpresa + l.rat + l.terceiros - l.salarioFamilia); });
+    RATEIO_GRUPOS.forEach(g => { t[g.key] = r2(res.linhas.reduce((s, l) => s + l[g.key], 0)); });
+    t.totalInssCentros = r2(res.linhas.reduce((s, l) => s + l.totalInss, 0));
+    t.totalInss = r2(t.totalInssCentros - res.salarioFamilia.naoIdentificado);
+    res.linhas.forEach(l => { l.pctInss = t.totalInssCentros ? l.totalInss / t.totalInssCentros : 0; });
+    // Total do eSocial = componentes − salário-família; a guia da DCTFWeb pode ter deduções (retenção 11%, compensações).
+    res.totalGovernoESocial = r2(alvos.reduce((s, a) => s + a[2], 0) - (num(gov.salarioFamilia) ? gov.salarioFamilia : 0));
+    res.totalGovernoGuia = num(gov.total) ? r2(gov.total) : null;
+    res.origemGuiaGoverno = gov.origemTotal || 'eSocial';
+    return res;
+}
+
 // Valores da conciliação de INSS (coluna Planilha Auxiliar) usados para fechar o rateio com a guia.
 // Sem salário-família na Planilha, a conciliação desconta o do Analítico — o rateio faz o mesmo.
 function rateioReferenciaConciliacao() {
@@ -4522,7 +4565,8 @@ function rateioReferenciaConciliacao() {
         salarioFamilia: sf,
         totalPlanilha: planilha && valido(planilha.total) ? planilha.total : null,
         totalGoverno: governo && valido(governo.total) ? governo.total : null,
-        planilha: planilha || null
+        planilha: planilha || null,
+        governo: governo || null
     };
 }
 
@@ -4552,7 +4596,10 @@ async function carregarRateio() {
             });
             doArquivo.forEach((t, chapa) => { if (!porChapa.has(chapa)) porChapa.set(chapa, t); });
         }
-        state.rateio = { ...calcularRateioCC(rowsList, fgtsCsv, { salarioFamilia: conc.salarioFamilia, salarioFamiliaColab: [...porChapa.values()] }),
+        const gov = conc.governo && conc.governo.synced ? conc.governo : null;
+        const sfTotal = gov && typeof gov.salarioFamilia === 'number' ? gov.salarioFamilia : conc.salarioFamilia;
+        const calc = ajustarRateioGoverno(calcularRateioCC(rowsList, fgtsCsv, { salarioFamilia: sfTotal, salarioFamiliaColab: [...porChapa.values()] }), gov);
+        state.rateio = { ...calc,
             conciliacao: conc, arquivos: planilhas.map(f => f.name), arquivoFgts: fgtsFile ? fgtsFile.name : null,
             arquivosAnalitico: analiticos.map(f => f.name) };
     } catch (e) {
@@ -4614,7 +4661,7 @@ function renderRateio(res) {
     const conc = conc0();
     if (!conc.processada) {
         msgs.push('Folha ainda não processada: rode o processamento para o rateio descontar o salário-família e conferir com o Total Guia INSS da conciliação.');
-    } else if (conc.totalPlanilha !== null) {
+    } else if (conc.totalPlanilha !== null && !res.ajusteGoverno) {
         const dif = Math.round((res.total.totalInss - conc.totalPlanilha) * 100) / 100;
         if (Math.abs(dif) <= 0.05) {
             infos.push(`Total INSS confere com o Total Guia INSS da conciliação (Planilha Auxiliar): ${formatCurrency(conc.totalPlanilha)}.`);
@@ -4631,8 +4678,19 @@ function renderRateio(res) {
             msgs.push(`Total INSS do rateio (${formatCurrency(res.total.totalInss)}) difere do Total Guia INSS da conciliação (${formatCurrency(conc.totalPlanilha)}) em ${formatCurrency(dif)}. ${partes.join('; ')}. A conciliação calcula patronal, RAT e Terceiros pelas alíquotas de Configurações; o rateio usa os valores das colunas do RM — confira RAT/FAP e Terceiros em Configurações.`);
         }
     }
-    if (conc.totalGoverno !== null && conc.totalGoverno !== undefined && Math.abs(res.total.totalInss - conc.totalGoverno) > 0.05) {
-        infos.push(`Total Guia INSS do Governo (DCTFWeb) na conciliação: ${formatCurrency(conc.totalGoverno)}.`);
+    if (res.ajusteGoverno) {
+        const aplic = res.ajusteGoverno.filter(a => a.aplicado);
+        const fora = res.ajusteGoverno.filter(a => !a.aplicado && Math.abs(a.dif) > 0.004);
+        if (aplic.length) infos.push(`Ajuste de arredondamento para fechar com o eSocial, distribuído pelos centros na proporção de cada componente: ${aplic.map(a => `${a.label} RM ${formatCurrency(a.rm)} → eSocial ${formatCurrency(a.governo)} (${formatCurrency(a.dif)})`).join('; ')}.`);
+        if (fora.length) msgs.push(`Diferença acima da tolerância de arredondamento entre o RM e o eSocial — não ajustada, revise base/alíquota: ${fora.map(a => `${a.label} RM ${formatCurrency(a.rm)} × eSocial ${formatCurrency(a.governo)} (dif. ${formatCurrency(a.dif)}, tolerância ${formatCurrency(a.tolerancia)})`).join('; ')}.`);
+        const difES = Math.round((res.total.totalInss - res.totalGovernoESocial) * 100) / 100;
+        if (Math.abs(difES) <= 0.05) infos.push(`Total INSS confere com o eSocial (Governo): ${formatCurrency(res.totalGovernoESocial)}.`);
+        else if (!fora.length) msgs.push(`Total INSS do rateio (${formatCurrency(res.total.totalInss)}) difere do eSocial (${formatCurrency(res.totalGovernoESocial)}) em ${formatCurrency(difES)}: confira o salário-família.`);
+        if (res.totalGovernoGuia !== null && Math.abs(res.totalGovernoGuia - res.totalGovernoESocial) > 0.05) {
+            infos.push(`Guia INSS (${res.origemGuiaGoverno}) ${formatCurrency(res.totalGovernoGuia)} difere do total do eSocial em ${formatCurrency(Math.round((res.totalGovernoGuia - res.totalGovernoESocial) * 100) / 100)}: retenções de 11% sobre notas, compensações ou deduções — não são custo da folha e não entram no rateio (lançar em INSS a recuperar/compensar, sem centro de custo).`);
+        }
+    } else if (conc.totalGoverno !== null && conc.totalGoverno !== undefined && Math.abs(res.total.totalInss - conc.totalGoverno) > 0.05) {
+        infos.push(`Total Guia INSS do Governo na conciliação: ${formatCurrency(conc.totalGoverno)}. Importe o eSocial (S-5011) para o rateio fechar com ele.`);
     }
     avisos.innerHTML = msgs.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(245,158,11,.12);color:var(--accent-orange, #b45309);font-size:.8rem">⚠️ ${escapeRateio(m)}</div>`).join('')
         + infos.map(m => `<div style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:rgba(14,165,233,.10);color:var(--text-secondary, inherit);font-size:.8rem">ℹ️ ${escapeRateio(m)}</div>`).join('');

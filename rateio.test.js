@@ -71,6 +71,18 @@ test('rateio por centro de custo: INSS/IRRF da Planilha Auxiliar, FGTS do FGTS D
         assert.equal(res.total.salarioFamilia, 100);
         assert.equal(res.total.totalInss, Math.round((243 + 59 + 300 - 100) * 100) / 100);
 
+        // Ajuste ao eSocial: arredondamento distribuído por componente; diferença grande só avisa.
+        const aj = ajustarRateioGoverno(calcularRateioCC([planilha], null, { salarioFamilia: 100, salarioFamiliaColab: sfColab }),
+            { synced: true, segurados: 245.01, seguradosCI: null, patronal: 309.99, patronalCI: null, ratfap: 18, terceiros: 99, salarioFamilia: 100, total: 500, origemTotal: 'DCTFWeb' });
+        const ajK = Object.fromEntries(aj.ajusteGoverno.map(a => [a.key, a]));
+        assert.equal(ajK.inssSegurado.aplicado, true);
+        assert.equal(aj.total.inssSegurado, 245.01);
+        assert.equal(aj.total.inssEmpresa, 309.99);
+        assert.equal(ajK.terceiros.aplicado, false); // 99 × 29: acima da tolerância
+        assert.equal(aj.total.terceiros, 29);
+        assert.equal(aj.total.totalInss, Math.round((aj.linhas.reduce((s, l) => s + l.totalInss, 0) - 7.2) * 100) / 100);
+        assert.equal(aj.totalGovernoESocial, 245.01 + 309.99 + 18 + 99 - 100);
+
         const semFgts = calcularRateioCC([planilha], null);
         assert.equal(semFgts.total.fgts, 0);
         assert.equal(semFgts.fgts.lido, false);
