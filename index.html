@@ -142,6 +142,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Conciliação
       </a>
+      <a href="#" class="nav-item" data-view="rateio">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 118 2.83"/><path d="M22 12A10 10 0 0012 2v10z"/></svg>
+        Rateio por C. Custo
+      </a>
       <a href="#" class="nav-item" data-view="fechamento">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg>
         Fechamento
@@ -603,6 +607,55 @@
             <h3 class="card-title">📋 Resumo do Fechamento</h3>
           </div>
           <div class="resumo-grid" id="resumoGrid"></div>
+        </div>
+      </div>
+
+      <!-- RATEIO POR CENTRO DE CUSTO VIEW -->
+      <div id="view-rateio" class="view">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Rateio por Centro de Custo</h1>
+            <p class="view-subtitle">INSS, FGTS e IRRF da Planilha de Bases agrupados por centro de custo para lançamento no RM</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="document.getElementById('input-rateio').click()">Carregar Planilha de Bases</button>
+            <button class="btn btn-secondary" id="btnCopiarRateio" onclick="copiarRateio()" disabled>Copiar tabela</button>
+            <button class="btn btn-primary" id="btnExportarRateio" onclick="exportarRateioExcel()" disabled>Exportar Excel</button>
+          </div>
+          <input type="file" id="input-rateio" accept=".xlsx,.xls" style="display:none" onchange="handleRateioFile(event)" />
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">Valores por centro de custo</h3>
+              <p class="card-subtitle" id="rateioOrigem" style="font-size:0.75rem;color:var(--text-muted)">Nenhuma Planilha de Bases carregada.</p>
+            </div>
+            <span class="badge badge-warning" id="rateioStatus">Pendente</span>
+          </div>
+          <div id="rateioAvisos"></div>
+          <div class="table-responsive">
+            <table class="data-table" id="tabelaRateio">
+              <thead>
+                <tr>
+                  <th>Centro de Custo</th>
+                  <th style="text-align:right">Colab.</th>
+                  <th style="text-align:right">INSS Segurado</th>
+                  <th style="text-align:right">INSS Empresa</th>
+                  <th style="text-align:right">RAT</th>
+                  <th style="text-align:right">Terceiros</th>
+                  <th style="text-align:right">Total INSS</th>
+                  <th style="text-align:right">FGTS</th>
+                  <th style="text-align:right">IRRF</th>
+                  <th style="text-align:right">% INSS</th>
+                </tr>
+              </thead>
+              <tbody id="bodyRateio">
+                <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:24px">Carregue a Planilha de Bases (aqui ou no Upload) para ver o rateio.</td></tr>
+              </tbody>
+              <tfoot id="footRateio"></tfoot>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1086,7 +1139,7 @@
     </div>
   </div>
 
-  <script src="app.js?v=44"></script>
+  <script src="app.js?v=45"></script>
 <script src="auth.js?v=3"></script>
 </body>
 </html>
