@@ -160,7 +160,8 @@ function persistFiles() {
     idbFiles('put', getCompKey(state.competencia), {
         planilha: f.planilha.filter(real), pdf: f.pdf.filter(real),
         encargos: real(f.encargos) ? f.encargos : null, fgtsDigital: real(f.fgtsDigital) ? f.fgtsDigital : null,
-        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null
+        esocial: real(f.esocial) ? f.esocial : null, dctf: real(f.dctf) ? f.dctf : null,
+        consignado: real(f.consignado) ? f.consignado : null, emprestimosRM: real(f.emprestimosRM) ? f.emprestimosRM : null
     }).catch(e => console.warn('Arquivos não guardados no navegador:', e));
 }
 
@@ -170,9 +171,12 @@ async function restoreStoredFiles() {
     try { saved = await idbFiles('get', getCompKey(state.competencia)); } catch (e) { return; }
     if (!saved) return;
     state.files = { planilha: saved.planilha || [], pdf: saved.pdf || [], ponto: null, encargos: saved.encargos,
-        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf };
+        fgtsDigital: saved.fgtsDigital, esocial: saved.esocial, dctf: saved.dctf,
+        consignado: saved.consignado || null, emprestimosRM: saved.emprestimosRM || null };
     renderFilePreviews();
     checkUploadProgress();
+    // A conferência do consignado não depende do processamento geral: refaz com os arquivos restaurados.
+    if (state.files.consignado || state.files.emprestimosRM) processConsignado();
 }
 
 async function saveState() {
@@ -627,7 +631,7 @@ function processUploadedFiles(fileList, type) {
 function renderFilePreviews() {
     // Update individual dropzone previews
     // Slots com arquivo único
-    ['encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(type => {
+    ['encargos', 'fgtsDigital', 'esocial', 'dctf', 'consignado', 'emprestimosRM'].forEach(type => {
         const file = state.files[type];
         const previewEl = document.getElementById(`preview-${type}`);
         const statusEl  = document.getElementById(`status-${type}`);
@@ -687,6 +691,8 @@ function renderFilePreviews() {
     if (state.files.fgtsDigital) allFileItems.push({ type: 'FGTS Digital', file: state.files.fgtsDigital, key: 'fgtsDigital' });
     if (state.files.esocial) allFileItems.push({ type: 'eSocial', file: state.files.esocial, key: 'esocial' });
     if (state.files.dctf) allFileItems.push({ type: 'DCTFWeb', file: state.files.dctf, key: 'dctf' });
+    if (state.files.consignado) allFileItems.push({ type: 'Guia Consignado', file: state.files.consignado, key: 'consignado' });
+    if (state.files.emprestimosRM) allFileItems.push({ type: 'Empréstimos RM', file: state.files.emprestimosRM, key: 'emprestimosRM' });
 
     if (allFileItems.length === 0) {
         html = `
@@ -4612,7 +4618,7 @@ function excluirDadosCompetencia() {
             state.conciliacao.desligados = [];
 
             // Limpar inputs de arquivo físicos
-            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf'].forEach(id => {
+            ['planilha', 'pdf', 'encargos', 'fgtsDigital', 'esocial', 'dctf', 'consignado', 'emprestimosRM'].forEach(id => {
                 const input = document.getElementById(`input-${id}`);
                 if (input) input.value = '';
             });
