@@ -2111,7 +2111,6 @@ async function processFiles() {
         }
         audit.divergencias = buildDivergencias(state.conciliacao, audit);
         conciliacaoAudit = audit;
-        enviarConciliacaoLog(audit);
 
         debugLog('reconciliation.assigned', {
             inss: excelBases.inss,
@@ -2135,8 +2134,11 @@ async function processFiles() {
         showView('validacao', document.querySelector('[data-view=validacao]'));
         runAllValidations();
         renderConciliacao(); // Garante que as tabelas e a guia sejam renderizadas com os novos dados
-        processConsignado(); // Independente do analítico; só roda se os arquivos estiverem carregados
+        await processConsignado(); // Independente do analítico; só roda se os arquivos estiverem carregados
+        await carregarRateio();
         saveState();
+        // Depois do consignado e do rateio: o log leva o resultado completo da análise.
+        enviarConciliacaoLog(audit);
         debugLog('process.finished', { outcome: 'success' });
 
     } catch (err) {
@@ -3037,7 +3039,22 @@ async function enviarConciliacaoLog(audit) {
         cnpj: emp.cnpj || state.config?.cnpj || '',
         competencia: state.competencia,
         geradoEm: audit.createdAt,
-        data: audit
+        data: {
+            ...audit,
+            // Resultado da análise (tabelas da conciliação, validações, consignado, rateio): o documento
+            // "states" guarda só a última competência; aqui fica o histórico por empresa e competência.
+            resultado: {
+                summary: state.summary,
+                conciliacao: state.conciliacao,
+                validations: state.validations,
+                fechamentoSteps: state.fechamentoSteps,
+                consignadoDetalhe: state.consignadoDetalhe || {},
+                rateio: state.rateio || null,
+                layoutResults: state.layoutResults,
+                arquivos: Object.fromEntries(Object.entries(state.files).map(([k, v]) =>
+                    [k, Array.isArray(v) ? v.map(f => f && f.name) : v ? v.name : null]))
+            }
+        }
     });
     try {
         // gzip: o log de uma folha grande passa do limite de 4,5 MB por requisição da Vercel.
