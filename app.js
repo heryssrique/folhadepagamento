@@ -1986,7 +1986,9 @@ async function processFiles() {
                 valor13: fgts13Valor,
                 baseRescisoria: 0,
                 valorRescisorio: 0,
-                total: fgtsValor + fgts13Valor
+                total: fgtsValor + fgts13Valor,
+                guia: null,
+                grrf: null
             }
         ];
 
@@ -2011,6 +2013,8 @@ async function processFiles() {
                 baseRescisoria: 0,
                 valorRescisorio: 0,
                 total: valMensal + val13,
+                guia: null,
+                grrf: null,
                 baseN: excelBases.fgtsN,
                 baseZ: excelBases.fgtsZ
             });
@@ -2665,7 +2669,7 @@ function generateReport(type) {
             const groups = [
                 ['INSS', state.conciliacao?.inss || [], [['Base Folha', 'base'], ['Segurados (1082)', 'segurados'], ['Patronal (1138-01)', 'patronal'], ['RAT Ajustado (1646)', 'ratfap'], ['Terceiros', 'terceiros'], ['Subtotal Empregados', 'subtotal'], ['Base Contribuintes Individuais', 'baseCI'], ['Segurados CI (1099)', 'seguradosCI'], ['Patronal CI (1138-04)', 'patronalCI'], ['Salário-Família', 'salarioFamilia'], ['Total Guia INSS', 'total']]],
                 ['IRRF', state.conciliacao?.irrf || [], [['IRRF Mensal', 'irrfMensal'], ['IRRF 13º', 'irrf13'], ['IRRF Férias', 'irrfFerias'], ['Total IRRF', 'total']]],
-                ['FGTS', state.conciliacao?.fgts || [], [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total']]]
+                ['FGTS', state.conciliacao?.fgts || [], [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total'], ['Guia FGTS Digital', 'guia'], ['(+) GRRF do mês (desligados)', 'grrf']]]
             ];
             return groups.map(([name, sources, metrics]) => {
                 const table = renderReportTable(['Métrica', ...sources.map(s => s.origem || 'Fonte')], metrics.map(([label, key]) => [label, ...sources.map(s => reportMoney(s[key]))]));
@@ -3215,7 +3219,7 @@ function parseFgtsDigitalNum(v) {
 // Coluna GFD (Governo) da conciliação de FGTS, do "..._TiposDeValor.csv":
 // "12 - FGTS 13o salario" → 13º; tipos rescisórios → rescisório; o resto (11 mensal, 15 aprendiz…) → mensal.
 function buildGovernoFgts(audit, tiposCsv) {
-    const out = { origem: 'FGTS Digital (Governo)', synced: false, baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0 };
+    const out = { origem: 'FGTS Digital (Governo)', synced: false, baseMensal: 0, valorMensal: 0, base13: 0, valor13: 0, baseRescisoria: 0, valorRescisorio: 0, total: 0, guia: 0, grrf: 0 };
     const lines = parseFgtsDigitalCsv(tiposCsv);
     if (lines.length === 0) return out;
     const col = name => lines[0].indexOf(name);
@@ -3234,6 +3238,7 @@ function buildGovernoFgts(audit, tiposCsv) {
         out.total += valor;
     });
     out.synced = true;
+    out.guia = out.total; // valor da guia do FGTS Digital, antes de somar a GRRF
     audit.add('FGTS Digital', 'info', 'Coluna GFD (Governo) do FGTS lida do TiposDeValor',
         `Mensal ${formatCurrency(out.valorMensal)} | 13º ${formatCurrency(out.valor13)} | Rescisório ${formatCurrency(out.valorRescisorio)} | Total ${formatCurrency(out.total)}`);
 
@@ -3251,6 +3256,7 @@ function buildGovernoFgts(audit, tiposCsv) {
         out.valorMensal += g.quitacao;
         out.valor13 += g.rescisao13;
         out.total += g.quitacao + g.rescisao13;
+        out.grrf = g.quitacao + g.rescisao13;
         audit.add('FGTS Digital', 'info', `GRRF do mês somada à coluna GFD (${audit.grrfTrabalhadores.length} desligado(s))`,
             `FGTS quitação ${formatCurrency(g.quitacao)} no mensal | FGTS 13º rescisão ${formatCurrency(g.rescisao13)} no 13º | bases estimadas por valor ÷ alíquota`);
     }
@@ -4074,7 +4080,10 @@ function renderFGTS() {
         { label: 'Valor FGTS 13º Salário', key: 'valor13' },
         { label: 'Base FGTS Rescisório', key: 'baseRescisoria' },
         { label: 'Valor FGTS Rescisorio', key: 'valorRescisorio' },
-        { label: 'Total a Recolher', key: 'total' }
+        { label: 'Total a Recolher', key: 'total' },
+        { section: 'Composição do GFD (Governo)' },
+        { label: 'Guia FGTS Digital', key: 'guia' },
+        { label: '(+) GRRF do mês (desligados)', key: 'grrf' }
     ]);
     
     if (!state.conciliacao.fgts || state.conciliacao.fgts.length === 0) {
@@ -4200,7 +4209,7 @@ function exportConciliacao() {
         const definitions = [
             { name: 'INSS', sources: state.conciliacao?.inss || [], metrics: [['Base Folha', 'base'], ['Segurados (1082)', 'segurados'], ['Patronal (1138-01)', 'patronal'], ['RAT Ajustado (1646)', 'ratfap'], ['Terceiros', 'terceiros'], ['Subtotal Empregados', 'subtotal'], ['Base Contribuintes Individuais', 'baseCI'], ['Segurados CI (1099)', 'seguradosCI'], ['Patronal CI (1138-04)', 'patronalCI'], ['Salário-Família', 'salarioFamilia'], ['Total Guia INSS', 'total']] },
             { name: 'IRRF', sources: state.conciliacao?.irrf || [], metrics: [['IRRF Mensal', 'irrfMensal'], ['IRRF 13º', 'irrf13'], ['IRRF Férias', 'irrfFerias'], ['Total IRRF', 'total']] },
-            { name: 'FGTS', sources: state.conciliacao?.fgts || [], metrics: [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total']] },
+            { name: 'FGTS', sources: state.conciliacao?.fgts || [], metrics: [['Base FGTS Mensal', 'baseMensal'], ['Valor FGTS Mensal', 'valorMensal'], ['Base FGTS 13º', 'base13'], ['Valor FGTS 13º', 'valor13'], ['Base FGTS Rescisória', 'baseRescisoria'], ['Valor FGTS Rescisório', 'valorRescisorio'], ['Total a Recolher', 'total'], ['Guia FGTS Digital', 'guia'], ['(+) GRRF do mês (desligados)', 'grrf']] },
             { name: 'Desligados', sources: state.conciliacao?.desligados || [], metrics: [['Quantidade', 'qtd'], ['FGTS Quitação', 'fgtsQuitacao'], ['FGTS Mês Anterior', 'fgtsMesAnterior'], ['FGTS Aviso Prévio', 'fgtsAvisoPrevio'], ['FGTS Artigo 22', 'fgtsArtigo22'], ['FGTS 13º Indenizado', 'fgts13Indenizado'], ['FGTS 13º Rescisão', 'fgts13Rescisao'], ['Total FGTS Rescisório', 'totalFGTS'], ['Base Rescisória Calculada', 'baseRescisoriaCalculada']] }
         ];
 
